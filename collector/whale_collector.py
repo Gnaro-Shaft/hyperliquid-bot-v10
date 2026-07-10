@@ -185,50 +185,67 @@ class WhaleCollector:
             return {}
 
     def _poll_cycle(self):
+        """Un cycle = poll de toutes les adresses + snapshot + clusters.
+
+        Heartbeat = « cycle réussi », même si zéro position/cluster : l'absence
+        de données n'est pas une panne (cf. _poll_flows). Une vraie panne
+        (API HL down, exceptions partout) → n_ok=0 → pas de battement → alerte.
+        """
         now_ms = int(time.time() * 1000)
         all_positions = []
+        n_ok = 0
         for addr in self._addresses:
             try:
                 all_positions.extend(self._fetch_positions(addr))
+                n_ok += 1
                 time.sleep(0.2)   # courtoisie rate-limit
             except Exception as e:
                 print(f"[WHALES][ERREUR] positions {addr[:10]}…: {e}")
 
-        if not all_positions:
-            return
+        if n_ok == 0:
+            return   # cycle en échec total → laisser l'alerte se déclencher
 
         # 1. Snapshot des positions
         if self.mongo is not None:
             try:
-                docs = [{**p, "timestamp": now_ms} for p in all_positions]
-                self.mongo[MONGO_COLLECTION_WHALE_POSITIONS].insert_many(docs)
+                if all_positions:
+                    docs = [{**p, "timestamp": now_ms} for p in all_positions]
+                    self.mongo[MONGO_COLLECTION_WHALE_POSITIONS].insert_many(docs)
                 self.heartbeat.beat("whale_positions", "global",
-                                    meta={"n_positions": len(docs),
-                                          "n_addresses": len(self._addresses)})
+                                    meta={"n_positions": len(all_positions),
+                                          "n_addresses_ok": n_ok})
             except Exception as e:
                 print(f"[WHALES][ERREUR][Mongo] positions: {e}")
 
         # 2. Clusters de liquidation par coin
         marks = self._mark_prices()
         clusters = build_liq_clusters(all_positions, marks)
-        if self.mongo is not None and clusters:
+        if self.mongo is not None:
             try:
-                docs = [{"timestamp": now_ms, "coin": coin, "mark_px": marks.get(coin),
-                         "clusters": cl} for coin, cl in clusters.items()]
-                self.mongo[MONGO_COLLECTION_LIQ_CLUSTERS].insert_many(docs)
+                if clusters:
+                    docs = [{"timestamp": now_ms, "coin": coin, "mark_px": marks.get(coin),
+                             "clusters": cl} for coin, cl in clusters.items()]
+                    self.mongo[MONGO_COLLECTION_LIQ_CLUSTERS].insert_many(docs)
                 self.heartbeat.beat("liq_clusters", "global",
-                                    meta={"n_coins": len(docs)})
+                                    meta={"n_coins": len(clusters)})
             except Exception as e:
                 print(f"[WHALES][ERREUR][Mongo] clusters: {e}")
 
     # ────────────────────── FLUX NETS (dépôts/retraits) ──────────────────────
 
     def _poll_flows(self):
-        """Dépôts/retraits USDC des adresses suivies depuis le dernier check."""
+        """Dépôts/retraits USDC des adresses suivies depuis le dernier check.
+
+        Le heartbeat bat à chaque CYCLE réussi, même sans aucun flux : l'absence
+        d'événements (les baleines ne bougent pas leurs fonds pendant des heures)
+        n'est pas une panne du collecteur. Sans ça : faux positifs « collecteur
+        muet > 5 min » (vécu le 10/07/2026, 2 alertes Telegram pour rien).
+        """
         since_ms = self._last_flow_check_ms
         now_ms = int(time.time() * 1000)
         deposits = withdrawals = 0.0
         n_dep = n_wd = 0
+        n_ok = 0
         for addr in self._addresses:
             try:
                 resp = requests.post(API_URL, json={
@@ -243,10 +260,17 @@ class WhaleCollector:
                         deposits += usdc; n_dep += 1
                     elif dtype == "withdraw":
                         withdrawals += usdc; n_wd += 1
+                n_ok += 1
                 time.sleep(0.2)
             except Exception as e:
                 print(f"[WHALES][ERREUR] flows {addr[:10]}…: {e}")
         self._last_flow_check_ms = now_ms
+
+        # Cycle réussi (au moins une adresse pollée) = collecteur vivant,
+        # qu'il y ait eu des flux ou non.
+        if n_ok > 0:
+            self.heartbeat.beat("whale_flows", "global",
+                                meta={"n_flows": n_dep + n_wd, "n_polled": n_ok})
 
         if (n_dep + n_wd) == 0 or self.mongo is None:
             return
@@ -262,7 +286,6 @@ class WhaleCollector:
                 "n_withdrawals": n_wd,
                 "n_addresses": len(self._addresses),
             })
-            self.heartbeat.beat("whale_flows", "global")
         except Exception as e:
             print(f"[WHALES][ERREUR][Mongo] flows: {e}")
 
