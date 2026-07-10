@@ -1,6 +1,11 @@
 # fly.toml — hyperliquid-bot-v10 (worker, pas de service HTTP)
 app = 'hyperliquid-bot-v10'
-primary_region = 'cdg'
+primary_region = 'ams'   # aligné sur le déploiement Launch UI du 10/07
+
+# IMPORTANT : PAS de [http_service] — c'est un WORKER (aucun port HTTP).
+# La Launch UI de Fly en avait injecté un avec auto_stop_machines=true :
+# le proxy ne voyant jamais de trafic, il éteignait le bot. Une seule
+# machine, toujours allumée, restart always.
 
 [build]
 
