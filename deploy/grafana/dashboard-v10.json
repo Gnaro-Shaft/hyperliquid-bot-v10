@@ -1,0 +1,159 @@
+{
+  "dashboard": {
+    "uid": "v10-collecte",
+    "title": "V10 — Collecte Hyperliquid",
+    "timezone": "utc",
+    "schemaVersion": 39,
+    "refresh": "1m",
+    "time": {"from": "now-6h", "to": "now"},
+    "panels": [
+      {
+        "id": 1,
+        "type": "table",
+        "title": "Santé des collecteurs (heartbeats)",
+        "description": "Âge du dernier battement par flux×coin. Rouge = muet > 5 min.",
+        "gridPos": {"h": 9, "w": 8, "x": 0, "y": 0},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "collector_health",
+          "queryLanguage": "json",
+          "queryText": "[{\"$project\": {\"_id\": 0, \"flux\": \"$_id\", \"age_s\": {\"$round\": [{\"$divide\": [{\"$subtract\": [{\"$toLong\": \"$$NOW\"}, \"$last_write_ms\"]}, 1000]}, 0]}}}, {\"$sort\": {\"age_s\": -1}}]"
+        }],
+        "fieldConfig": {
+          "defaults": {"custom": {"align": "auto"}},
+          "overrides": [{
+            "matcher": {"id": "byName", "options": "age_s"},
+            "properties": [
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}},
+              {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 180},
+                {"color": "red", "value": 300}
+              ]}}
+            ]
+          }]
+        }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Évaluations (dernière heure)",
+        "gridPos": {"h": 5, "w": 4, "x": 8, "y": 0},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "signal_evaluations",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"$expr\": {\"$gte\": [\"$timestamp\", {\"$subtract\": [{\"$toLong\": \"$$NOW\"}, 3600000]}]}}}, {\"$count\": \"evaluations\"}]"
+        }],
+        "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [
+          {"color": "red", "value": null},
+          {"color": "yellow", "value": 1200},
+          {"color": "green", "value": 2000}
+        ]}}}
+      },
+      {
+        "id": 3,
+        "type": "piechart",
+        "title": "Régimes (fenêtre affichée)",
+        "gridPos": {"h": 9, "w": 5, "x": 12, "y": 0},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "signal_evaluations",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}, \"regime\": {\"$ne\": null}}}, {\"$group\": {\"_id\": \"$regime\", \"n\": {\"$sum\": 1}}}, {\"$project\": {\"_id\": 0, \"regime\": \"$_id\", \"n\": 1}}]"
+        }],
+        "options": {"pieType": "donut", "legend": {"placement": "right"}}
+      },
+      {
+        "id": 4,
+        "type": "table",
+        "title": "Derniers signaux forts (score ±2)",
+        "gridPos": {"h": 9, "w": 7, "x": 17, "y": 0},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "signal_evaluations",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"score\": {\"$in\": [-2, 2]}}}, {\"$sort\": {\"timestamp\": -1}}, {\"$limit\": 20}, {\"$project\": {\"_id\": 0, \"heure\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"score\": 1, \"raw_score\": 1, \"regime\": 1}}]"
+        }]
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "raw_score par coin",
+        "gridPos": {"h": 9, "w": 12, "x": 0, "y": 9},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "signal_evaluations",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"raw_score\": 1}}]"
+        }],
+        "transformations": [
+          {"id": "convertFieldType", "options": {"conversions": [{"targetField": "ts", "destinationType": "time"}]}},
+          {"id": "partitionByValues", "options": {"fields": ["coin"]}}
+        ],
+        "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "spanNulls": true, "showPoints": "never"}}}
+      },
+      {
+        "id": 6,
+        "type": "timeseries",
+        "title": "Funding rate par coin",
+        "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "funding_rates",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"funding_rate\": 1}}]"
+        }],
+        "transformations": [
+          {"id": "convertFieldType", "options": {"conversions": [{"targetField": "ts", "destinationType": "time"}]}},
+          {"id": "partitionByValues", "options": {"fields": ["coin"]}}
+        ],
+        "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "spanNulls": true, "showPoints": "never"}}}
+      },
+      {
+        "id": 7,
+        "type": "timeseries",
+        "title": "Spread % par coin (orderbook)",
+        "gridPos": {"h": 9, "w": 12, "x": 0, "y": 18},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "orderbook_snapshots",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"spread_pct\": 1}}]"
+        }],
+        "transformations": [
+          {"id": "convertFieldType", "options": {"conversions": [{"targetField": "ts", "destinationType": "time"}]}},
+          {"id": "partitionByValues", "options": {"fields": ["coin"]}}
+        ],
+        "fieldConfig": {"defaults": {"unit": "percentunit", "custom": {"drawStyle": "line", "spanNulls": true, "showPoints": "never"}}}
+      },
+      {
+        "id": 8,
+        "type": "timeseries",
+        "title": "Clusters de liquidation — notionnel total par coin",
+        "gridPos": {"h": 9, "w": 12, "x": 12, "y": 18},
+        "datasource": {"uid": "mongo-v10", "type": "haohanyang-mongodb-datasource"},
+        "targets": [{
+          "refId": "A",
+          "collection": "liquidation_clusters",
+          "queryLanguage": "json",
+          "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"notionnel\": {\"$sum\": \"$clusters.notional\"}}}]"
+        }],
+        "transformations": [
+          {"id": "convertFieldType", "options": {"conversions": [{"targetField": "ts", "destinationType": "time"}]}},
+          {"id": "partitionByValues", "options": {"fields": ["coin"]}}
+        ],
+        "fieldConfig": {"defaults": {"unit": "currencyUSD", "custom": {"drawStyle": "line", "spanNulls": true, "showPoints": "never"}}}
+      }
+    ]
+  },
+  "overwrite": true,
+  "message": "Dashboard V10 collecte — provisionné par script"
+}
