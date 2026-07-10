@@ -153,7 +153,7 @@
       {
         "id": 4,
         "type": "table",
-        "title": "Derniers signaux forts (score ±2)",
+        "title": "Derniers signaux non-neutres (±2 = fort)",
         "gridPos": {
           "h": 9,
           "w": 7,
@@ -169,9 +169,54 @@
             "refId": "A",
             "collection": "signal_evaluations",
             "queryLanguage": "json",
-            "queryText": "[{\"$match\": {\"score\": {\"$in\": [-2, 2]}}}, {\"$sort\": {\"timestamp\": -1}}, {\"$limit\": 20}, {\"$project\": {\"_id\": 0, \"heure\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"score\": 1, \"raw_score\": 1, \"regime\": 1}}]"
+            "queryText": "[{\"$match\": {\"score\": {\"$ne\": 0}}}, {\"$sort\": {\"timestamp\": -1}}, {\"$limit\": 25}, {\"$project\": {\"_id\": 0, \"heure\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"score\": 1, \"raw_score\": 1, \"regime\": 1}}]"
           }
-        ]
+        ],
+        "fieldConfig": {
+          "defaults": {},
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "score"
+              },
+              "properties": [
+                {
+                  "id": "custom.cellOptions",
+                  "value": {
+                    "type": "color-background"
+                  }
+                },
+                {
+                  "id": "mappings",
+                  "value": [
+                    {
+                      "type": "value",
+                      "options": {
+                        "-2": {
+                          "color": "red",
+                          "text": "-2 VENTE FORTE"
+                        },
+                        "-1": {
+                          "color": "orange",
+                          "text": "-1"
+                        },
+                        "1": {
+                          "color": "light-green",
+                          "text": "+1"
+                        },
+                        "2": {
+                          "color": "green",
+                          "text": "+2 ACHAT FORT"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
       },
       {
         "id": 5,
@@ -418,5 +463,5 @@
     ]
   },
   "overwrite": true,
-  "message": "Noms de séries nettoyés (coin seul)"
+  "message": "Signaux non-neutres au lieu de ±2 seuls (panneau vide en marché calme)"
 }
