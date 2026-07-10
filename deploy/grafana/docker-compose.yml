@@ -1,0 +1,28 @@
+# Grafana V10 — dashboard de la collecte (homeserv01, port 3002)
+#
+# Lancement (depuis ~/V10) :
+#   docker compose --env-file .env -f deploy/grafana/docker-compose.yml up -d
+#
+# Datasource : MongoDB Atlas (plugin communautaire haohanyang-mongodb-datasource)
+# → visualise le buffer chaud (4 jours). L'historique long vit en Parquet ;
+# on branchera DuckDB plus tard si besoin d'un dashboard historique.
+
+services:
+  grafana:
+    image: grafana/grafana-oss:11.5.1
+    container_name: v10-grafana
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-v10-collect}
+      - GF_INSTALL_PLUGINS=haohanyang-mongodb-datasource
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - MONGO_URL=${MONGO_URL}
+      - MONGO_DB=${MONGO_DB:-bot_hyperliquid_v10}
+    volumes:
+      - v10-grafana-data:/var/lib/grafana
+
+volumes:
+  v10-grafana-data:
