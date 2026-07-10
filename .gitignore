@@ -1,0 +1,20 @@
+# Environnement
+venv/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Données locales (le dataset vit dans Mongo + Parquet exporté, pas dans git)
+data/
+
+# Runtime
+KILL
+scripts/.watchdog_state.json
+carry_mgr.log
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

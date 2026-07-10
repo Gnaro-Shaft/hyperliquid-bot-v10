@@ -1,0 +1,16 @@
+# Runtime bot + collectors (cloud)
+ccxt
+websockets
+pymongo[srv]
+python-dotenv
+pandas
+requests
+numpy
+dnspython
+
+# Export / analyse (homeserv01 — facultatif sur le cloud)
+polars
+duckdb
+
+# Dev
+pytest

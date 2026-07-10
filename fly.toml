@@ -1,0 +1,24 @@
+# fly.toml — hyperliquid-bot-v10 (worker, pas de service HTTP)
+app = 'hyperliquid-bot-v10'
+primary_region = 'cdg'
+
+[build]
+
+[env]
+  DEBUG = 'true'
+  PYTHONUNBUFFERED = '1'
+
+[processes]
+  app = "python main.py"
+
+[[restart]]
+  policy = 'always'
+  max_retries = 0
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512
+  auto_stop = false
+  auto_start = true
