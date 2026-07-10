@@ -8,9 +8,12 @@ NOW_MS = 1_700_000_000_000
 THRESHOLDS = {"max_1m_age_s": 300, "max_15m_age_s": 2400, "max_consec_errors": 5}
 
 
-def _hb(component, coin, age_s):
-    return {"_id": f"{component}:{coin}", "component": component, "coin": coin,
-            "last_write_ms": NOW_MS - int(age_s * 1000)}
+def _hb(component, coin, age_s, max_age_s=None):
+    doc = {"_id": f"{component}:{coin}", "component": component, "coin": coin,
+           "last_write_ms": NOW_MS - int(age_s * 1000)}
+    if max_age_s is not None:
+        doc["max_age_s"] = max_age_s
+    return doc
 
 
 def test_fresh_heartbeats_are_not_stale():
@@ -34,6 +37,22 @@ def test_one_dead_coin_does_not_hide_behind_others():
     hbs.append(_hb("ws_candles", "TIA", 900))   # TIA muet depuis 15 min
     stale = stale_heartbeats(hbs, NOW_MS, 300)
     assert [s["coin"] for s in stale] == ["TIA"]
+
+
+def test_slow_pollers_use_their_own_threshold():
+    """rest_funding_oi poll toutes les 300s : son âge frôle 300s par
+    conception. Son seuil propre (max_age_s=660) évite le faux positif,
+    sans assouplir les flux rapides (WS) qui gardent le défaut de 300s."""
+    hbs = [
+        _hb("rest_funding_oi", "BTC", 400, max_age_s=660),   # normal pour un poller 300s
+        _hb("rest_funding_oi", "ETH", 700, max_age_s=660),   # vraiment muet
+        _hb("ws_candles", "BTC", 400),                        # WS : défaut 300s → muet
+    ]
+    stale = stale_heartbeats(hbs, NOW_MS, 300)
+    assert {(s["component"], s["coin"]) for s in stale} == \
+           {("rest_funding_oi", "ETH"), ("ws_candles", "BTC")}
+    eth = next(s for s in stale if s["coin"] == "ETH")
+    assert eth["limit_s"] == 660
 
 
 def test_evaluate_health_includes_stale_streams():

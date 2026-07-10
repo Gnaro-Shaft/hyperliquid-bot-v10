@@ -21,8 +21,14 @@ class Heartbeat:
         self._last_write = {}
         self._lock = threading.Lock()
 
-    def beat(self, component, coin="global", meta=None):
-        """Signale que <component> vient d'écrire une donnée pour <coin>."""
+    def beat(self, component, coin="global", meta=None, max_age_s=None):
+        """Signale que <component> vient de terminer un cycle réussi pour <coin>.
+
+        max_age_s : seuil de mutisme PROPRE à ce flux. Indispensable pour les
+        pollers lents : rest_funding_oi tourne toutes les 300s, son âge frôle
+        donc en permanence le seuil global de 300s → faux positifs. Règle :
+        max_age_s ≈ 2 × intervalle de poll + marge.
+        """
         if self.db is None:
             return
         key = f"{component}:{coin}"
@@ -38,6 +44,8 @@ class Heartbeat:
                 "coin": coin,
                 "last_write_ms": int(now * 1000),
             }
+            if max_age_s is not None:
+                doc["max_age_s"] = int(max_age_s)
             if meta:
                 doc["meta"] = meta
             self.db[self.col_name].replace_one({"_id": key}, doc, upsert=True)
@@ -54,22 +62,26 @@ def read_heartbeats(db, collection_name):
 
 
 def stale_heartbeats(heartbeats, now_ms, max_age_s):
-    """Fonction PURE : retourne les flux muets depuis plus de max_age_s.
+    """Fonction PURE : retourne les flux muets.
 
-    heartbeats : liste de docs {_id, component, coin, last_write_ms}
-    Retourne une liste de {key, component, coin, age_s}.
+    Seuil par flux : le doc peut porter son propre `max_age_s` (pollers lents) ;
+    sinon le défaut global s'applique.
+    heartbeats : liste de docs {_id, component, coin, last_write_ms[, max_age_s]}
+    Retourne une liste de {key, component, coin, age_s, limit_s}.
     """
     stale = []
     for hb in heartbeats:
         last = hb.get("last_write_ms")
         if last is None:
             continue
+        limit = hb.get("max_age_s") or max_age_s
         age_s = (now_ms - int(last)) / 1000.0
-        if age_s > max_age_s:
+        if age_s > limit:
             stale.append({
                 "key": hb.get("_id", "?"),
                 "component": hb.get("component", "?"),
                 "coin": hb.get("coin", "?"),
                 "age_s": round(age_s, 1),
+                "limit_s": limit,
             })
     return stale

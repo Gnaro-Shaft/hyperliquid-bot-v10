@@ -131,7 +131,8 @@ class RestCollector:
                         {"$set": oi_doc},
                         upsert=True
                     )
-                    self.heartbeat.beat("rest_funding_oi", coin)
+                    self.heartbeat.beat("rest_funding_oi", coin,
+                                        max_age_s=DL_REST_INTERVAL * 2 + 60)
                 except Exception as e:
                     print(f"[REST_COLLECTOR][ERREUR][MongoDB] {coin}: {e}")
 

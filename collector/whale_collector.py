@@ -213,7 +213,8 @@ class WhaleCollector:
                     self.mongo[MONGO_COLLECTION_WHALE_POSITIONS].insert_many(docs)
                 self.heartbeat.beat("whale_positions", "global",
                                     meta={"n_positions": len(all_positions),
-                                          "n_addresses_ok": n_ok})
+                                          "n_addresses_ok": n_ok},
+                                    max_age_s=WHALE_POLL_INTERVAL * 2 + 60)
             except Exception as e:
                 print(f"[WHALES][ERREUR][Mongo] positions: {e}")
 
@@ -227,7 +228,8 @@ class WhaleCollector:
                              "clusters": cl} for coin, cl in clusters.items()]
                     self.mongo[MONGO_COLLECTION_LIQ_CLUSTERS].insert_many(docs)
                 self.heartbeat.beat("liq_clusters", "global",
-                                    meta={"n_coins": len(clusters)})
+                                    meta={"n_coins": len(clusters)},
+                                    max_age_s=WHALE_POLL_INTERVAL * 2 + 60)
             except Exception as e:
                 print(f"[WHALES][ERREUR][Mongo] clusters: {e}")
 
@@ -270,7 +272,8 @@ class WhaleCollector:
         # qu'il y ait eu des flux ou non.
         if n_ok > 0:
             self.heartbeat.beat("whale_flows", "global",
-                                meta={"n_flows": n_dep + n_wd, "n_polled": n_ok})
+                                meta={"n_flows": n_dep + n_wd, "n_polled": n_ok},
+                                max_age_s=WHALE_POLL_INTERVAL * 2 + 60)
 
         if (n_dep + n_wd) == 0 or self.mongo is None:
             return

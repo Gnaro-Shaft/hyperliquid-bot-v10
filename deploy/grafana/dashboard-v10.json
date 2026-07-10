@@ -14,7 +14,7 @@
         "id": 1,
         "type": "table",
         "title": "Santé des collecteurs (heartbeats)",
-        "description": "Âge du dernier battement par flux×coin. Rouge = muet > 5 min.",
+        "description": "Charge = âge / limite propre au flux (pollers lents = limite plus haute). Rouge ≥ 100%.",
         "gridPos": {
           "h": 9,
           "w": 8,
@@ -30,7 +30,7 @@
             "refId": "A",
             "collection": "collector_health",
             "queryLanguage": "json",
-            "queryText": "[{\"$project\": {\"_id\": 0, \"flux\": \"$_id\", \"age_s\": {\"$round\": [{\"$divide\": [{\"$subtract\": [{\"$toLong\": \"$$NOW\"}, \"$last_write_ms\"]}, 1000]}, 0]}}}, {\"$sort\": {\"age_s\": -1}}]"
+            "queryText": "[{\"$project\": {\"_id\": 0, \"flux\": \"$_id\", \"age_s\": {\"$round\": [{\"$divide\": [{\"$subtract\": [{\"$toLong\": \"$$NOW\"}, \"$last_write_ms\"]}, 1000]}, 0]}, \"limite_s\": {\"$ifNull\": [\"$max_age_s\", 300]}, \"charge\": {\"$round\": [{\"$divide\": [{\"$divide\": [{\"$subtract\": [{\"$toLong\": \"$$NOW\"}, \"$last_write_ms\"]}, 1000]}, {\"$ifNull\": [\"$max_age_s\", 300]}]}, 2]}}}, {\"$sort\": {\"charge\": -1}}]"
           }
         ],
         "fieldConfig": {
@@ -43,7 +43,7 @@
             {
               "matcher": {
                 "id": "byName",
-                "options": "age_s"
+                "options": "charge"
               },
               "properties": [
                 {
@@ -51,6 +51,10 @@
                   "value": {
                     "type": "color-background"
                   }
+                },
+                {
+                  "id": "unit",
+                  "value": "percentunit"
                 },
                 {
                   "id": "thresholds",
@@ -63,11 +67,11 @@
                       },
                       {
                         "color": "yellow",
-                        "value": 180
+                        "value": 0.7
                       },
                       {
                         "color": "red",
-                        "value": 300
+                        "value": 1.0
                       }
                     ]
                   }
@@ -147,8 +151,19 @@
           "pieType": "donut",
           "legend": {
             "placement": "right"
+          },
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
           }
-        }
+        },
+        "transformations": [
+          {
+            "id": "rowsToFields",
+            "options": {}
+          }
+        ]
       },
       {
         "id": 4,
@@ -463,5 +478,5 @@
     ]
   },
   "overwrite": true,
-  "message": "Signaux non-neutres au lieu de ±2 seuls (panneau vide en marché calme)"
+  "message": "Heartbeats: charge relative par flux; donut régimes: rowsToFields"
 }
