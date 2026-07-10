@@ -158,7 +158,11 @@ WHALE_TOP_N = int(os.getenv("WHALE_TOP_N", "30"))                        # nb d'
 # et seules si le leaderboard (endpoint non officiel) est indisponible.
 WHALE_ADDRESSES = [a.strip() for a in os.getenv("WHALE_ADDRESSES", "").split(",") if a.strip()]
 LIQ_CLUSTER_BUCKET_PCT = 0.005    # largeur des buckets de clusters de liquidation (0.5%)
-LIQ_CLUSTER_RANGE_PCT = 0.25      # fenêtre de clustering : ±25% autour du mark price
+# Fenêtre de clustering autour du mark. Large par défaut (±100%) : les top
+# comptes du leaderboard sont PEU leveragés (liq à 37%..457%+ du marché,
+# mesuré le 10/07/2026 — ±25% excluait 23 positions sur 23). On logge tout
+# avec la distance ; le filtrage par pertinence se fait à l'analyse.
+LIQ_CLUSTER_RANGE_PCT = float(os.getenv("LIQ_CLUSTER_RANGE_PCT", "1.0"))
 
 # Seuil « gros trade » en NOTIONNEL USD (coin-agnostique — V10 multi-coins)
 LARGE_TRADE_USD = float(os.getenv("LARGE_TRADE_USD", "25000"))
