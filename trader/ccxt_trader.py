@@ -27,6 +27,20 @@ from utils.min_order import min_target_size, meets_minimum
 from utils.prices import round_price_sig
 
 
+def _ccxt_symbol(pair):
+    """Symbole ccxt d'une paire canonique HL.
+
+    Les contrats « kilo » d'Hyperliquid (kPEPE = 1000 PEPE) s'écrivent kPEPE
+    côté WS/clearinghouse mais KPEPE/USDC:USDC dans les marchés ccxt. Partout
+    ailleurs (Mongo, positions, logs) on garde le nom canonique HL ; la
+    conversion ne se fait qu'ici, à la frontière exchange.
+    """
+    base, _, rest = pair.partition("/")
+    if base.startswith("k"):
+        base = base.upper()
+    return f"{base}/{rest}"
+
+
 class HyperliquidTrader:
     def __init__(self):
         self.exchange = ccxt.hyperliquid({
@@ -42,10 +56,14 @@ class HyperliquidTrader:
         except Exception as e:
             print(f"[TRADER] load_markets au démarrage échoué (réessai plus tard): {e}")
 
+    def _sym(self, pair=None):
+        """Symbole ccxt de la paire courante (ou fournie)."""
+        return _ccxt_symbol(pair or self.pair)
+
     def _round_price(self, price):
         """Arrondit un prix aux règles de l'exchange, fallback 5 chiffres significatifs."""
         try:
-            return float(self.exchange.price_to_precision(self.pair, price))
+            return float(self.exchange.price_to_precision(self._sym(), price))
         except Exception:
             return round_price_sig(price)
 
@@ -94,9 +112,9 @@ class HyperliquidTrader:
         un notionnel >= min_col. Remonte d'un cran de précision si l'arrondi est
         passé sous le minimum. Fallback round(6) si la précision est indisponible."""
         try:
-            amt = float(self.exchange.amount_to_precision(self.pair, size))
+            amt = float(self.exchange.amount_to_precision(self._sym(), size))
             if amt * price < min_col:
-                market = self.exchange.market(self.pair)
+                market = self.exchange.market(self._sym())
                 prec = (market.get("precision") or {}).get("amount")
                 if isinstance(prec, int):
                     inc = 10 ** (-prec)
@@ -104,7 +122,7 @@ class HyperliquidTrader:
                     inc = prec
                 else:
                     inc = 1e-6
-                amt = float(self.exchange.amount_to_precision(self.pair, amt + inc))
+                amt = float(self.exchange.amount_to_precision(self._sym(), amt + inc))
             return amt
         except Exception as e:
             print(f"[TRADER] _safe_amount fallback round(6): {e}")
@@ -151,7 +169,7 @@ class HyperliquidTrader:
         # Ordre principal
         try:
             main_order = self.exchange.create_order(
-                symbol=self.pair,
+                symbol=self._sym(),
                 type="market",
                 side=side,
                 amount=size,
@@ -178,7 +196,7 @@ class HyperliquidTrader:
         tp_order_id = None
         try:
             tp_order = self.exchange.create_order(
-                symbol=self.pair,
+                symbol=self._sym(),
                 type="market",
                 side=closing_side,
                 amount=size,
@@ -194,7 +212,7 @@ class HyperliquidTrader:
         sl_order_id = None
         try:
             sl_order = self.exchange.create_order(
-                symbol=self.pair,
+                symbol=self._sym(),
                 type="market",
                 side=closing_side,
                 amount=size,
@@ -245,7 +263,7 @@ class HyperliquidTrader:
 
         # 2. Fetcher le prix actuel AVANT de fermer (plus fiable que markPrice)
         try:
-            ticker = self.exchange.fetch_ticker(self.pair)
+            ticker = self.exchange.fetch_ticker(self._sym())
             current_price = float(ticker.get("last", 0))
         except Exception:
             current_price = 0
@@ -253,14 +271,14 @@ class HyperliquidTrader:
         # 3. Fermer la position
         positions = self.fetch_positions()
         for pos in positions:
-            if pos.get("symbol") == self.pair and float(pos.get("contracts", 0)) > 0:
+            if pos.get("symbol") == self._sym() and float(pos.get("contracts", 0)) > 0:
                 amt = abs(float(pos["contracts"]))
                 side = "sell" if pos.get("side") == "long" else "buy"
                 entry_price = float(pos.get("entryPrice", 0))
 
                 try:
                     order = self.exchange.create_order(
-                        symbol=self.pair,
+                        symbol=self._sym(),
                         type="market",
                         side=side,
                         amount=amt,
@@ -308,29 +326,29 @@ class HyperliquidTrader:
         try:
             if old_sl_order_id:
                 try:
-                    self.exchange.cancel_order(old_sl_order_id, self.pair)
+                    self.exchange.cancel_order(old_sl_order_id, self._sym())
                     if DEBUG:
                         print(f"[TRADER] Ancien SL annulé (by ID): {old_sl_order_id}")
                 except Exception:
                     pass  # Peut déjà être exécuté/annulé — on continue quand même
             else:
-                open_orders = self.exchange.fetch_open_orders(self.pair)
+                open_orders = self.exchange.fetch_open_orders(self._sym())
                 for order in open_orders:
                     otype = order.get("type", "").lower()
                     if "stop" in otype or (
                         order.get("reduceOnly") and "take" not in otype and "profit" not in otype
                     ):
-                        self.exchange.cancel_order(order["id"], self.pair)
+                        self.exchange.cancel_order(order["id"], self._sym())
                         if DEBUG:
                             print(f"[TRADER] Ancien SL annulé (by type): {order['id']}")
 
             positions = self.fetch_positions()
             for pos in positions:
                 contracts = float(pos.get("contracts") or 0)
-                if pos.get("symbol") == self.pair and contracts > 0:
+                if pos.get("symbol") == self._sym() and contracts > 0:
                     side_close = "sell" if pos.get("side") == "long" else "buy"
                     sl_order = self.exchange.create_order(
-                        self.pair, "market", side_close, contracts,
+                        self._sym(), "market", side_close, contracts,
                         price=new_sl_price,
                         params={"stopLossPrice": new_sl_price, "reduceOnly": True}
                     )
@@ -349,29 +367,29 @@ class HyperliquidTrader:
         try:
             if old_tp_order_id:
                 try:
-                    self.exchange.cancel_order(old_tp_order_id, self.pair)
+                    self.exchange.cancel_order(old_tp_order_id, self._sym())
                     if DEBUG:
                         print(f"[TRADER] Ancien TP annule (by ID): {old_tp_order_id}")
                 except Exception:
                     pass
             else:
-                open_orders = self.exchange.fetch_open_orders(self.pair)
+                open_orders = self.exchange.fetch_open_orders(self._sym())
                 for order in open_orders:
                     otype = order.get("type", "").lower()
                     if "take" in otype or "profit" in otype or (
                         order.get("reduceOnly") and "stop" not in otype
                     ):
-                        self.exchange.cancel_order(order["id"], self.pair)
+                        self.exchange.cancel_order(order["id"], self._sym())
                         if DEBUG:
                             print(f"[TRADER] Ancien TP annule (by type): {order['id']}")
 
             positions = self.fetch_positions()
             for pos in positions:
                 contracts = float(pos.get("contracts") or 0)
-                if pos.get("symbol") == self.pair and contracts > 0:
+                if pos.get("symbol") == self._sym() and contracts > 0:
                     side_close = "sell" if pos.get("side") == "long" else "buy"
                     tp_order = self.exchange.create_order(
-                        self.pair, "limit", side_close, contracts,
+                        self._sym(), "limit", side_close, contracts,
                         price=new_tp_price,
                         params={"reduceOnly": True}
                     )
@@ -387,10 +405,10 @@ class HyperliquidTrader:
         if not self.pair:
             return
         try:
-            open_orders = self.exchange.fetch_open_orders(self.pair)
+            open_orders = self.exchange.fetch_open_orders(self._sym())
             for order in open_orders:
                 try:
-                    self.exchange.cancel_order(order["id"], self.pair)
+                    self.exchange.cancel_order(order["id"], self._sym())
                     if DEBUG:
                         print(f"[TRADER] Ordre annule: {order['id']} ({order.get('type', '?')})")
                 except Exception as e:
@@ -402,7 +420,7 @@ class HyperliquidTrader:
 
     def fetch_positions(self):
         try:
-            return self.exchange.fetch_positions([self.pair]) if self.pair else []
+            return self.exchange.fetch_positions([self._sym()]) if self.pair else []
         except Exception as e:
             print(f"[TRADER][ERREUR] fetch_positions: {e}")
             return []
@@ -412,12 +430,12 @@ class HyperliquidTrader:
         pairs_to_check = [self.pair] if self.pair else PAIRS
         for pair in pairs_to_check:
             try:
-                positions = self.exchange.fetch_positions([pair])
+                positions = self.exchange.fetch_positions([_ccxt_symbol(pair)])
                 for pos in positions:
                     contracts = float(pos.get("contracts") or 0)
                     if contracts > 0:
                         if not self.pair:
-                            self.pair = pos.get("symbol", pair)
+                            self.pair = pair
                         return True, {
                             "side": pos.get("side"),
                             "entry_price": float(pos.get("entryPrice") or 0),
@@ -434,7 +452,7 @@ class HyperliquidTrader:
         try:
             if since_ms is None:
                 since_ms = int((time.time() - 3600) * 1000)  # derniere heure
-            trades = self.exchange.fetch_my_trades(self.pair, since=since_ms, limit=50)
+            trades = self.exchange.fetch_my_trades(self._sym(), since=since_ms, limit=50)
             if not trades:
                 return None
             last = trades[-1]

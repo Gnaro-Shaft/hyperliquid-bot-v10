@@ -14,7 +14,12 @@ PAPER_MODE = os.getenv("PAPER_MODE", "false").strip().lower() in ("1", "true", "
 PAPER_START_BALANCE = float(os.getenv("PAPER_START_BALANCE", "1000"))
 
 # === EXCHANGE & PAIRS (V10 : 10 coins, collecte + trading tiny-size) ===
-V10_COINS = ["BTC", "ETH", "SOL", "HYPE", "DOGE", "WIF", "PEPE", "SUI", "INJ", "TIA"]
+# Noms CANONIQUES Hyperliquid (WS + clearinghouse + Mongo). PEPE n'existe pas
+# sur HL : le contrat est kPEPE (1000 PEPE). Souscrire un coin inconnu fait
+# fermer TOUTE la connexion WS sans message d'erreur (constaté le 10/07/2026).
+# Côté ccxt le symbole s'écrit KPEPE/USDC:USDC — conversion à la frontière
+# exchange uniquement (trader/ccxt_trader._ccxt_symbol).
+V10_COINS = ["BTC", "ETH", "SOL", "HYPE", "DOGE", "WIF", "kPEPE", "SUI", "INJ", "TIA"]
 PAIRS = [f"{c}/USDC:USDC" for c in V10_COINS]
 COLLECT_PAIRS = PAIRS           # tout ce qui est tradé est collecté (et inversement)
 

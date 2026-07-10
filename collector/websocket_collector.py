@@ -33,6 +33,14 @@ COINS = [pair.split("/")[0] for pair in COLLECT_PAIRS]
 PING_INTERVAL = 30
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 
+# Hyperliquid ferme TOUTE la connexion WS, sans message d'erreur, si UNE
+# souscription référence un coin inconnu (constaté le 10/07/2026 avec PEPE,
+# qui s'appelle kPEPE sur HL). On shard donc les coins sur plusieurs
+# connexions : un coin invalide/retiré du listing ne tue que son shard de 5,
+# pas la collecte des 10. (50 souscriptions sur une connexion passent sinon.)
+WS_SHARD_SIZE = 5
+SUBSCRIBE_THROTTLE_S = 0.05   # petite pause entre les sends de souscription
+
 
 class WebSocketCollector:
     def __init__(self, context_store=None):
@@ -109,23 +117,26 @@ class WebSocketCollector:
     def stop(self):
         self._running = False
 
-    async def subscribe(self, ws):
-        """Subscribe a tous les channels : candles + l2Book + trades, par coin."""
-        for coin in COINS:
+    async def subscribe(self, ws, coins):
+        """Subscribe aux channels candles + l2Book + trades pour un shard de coins."""
+        for coin in coins:
             for tf in ["1m", "15m", "1h"]:
                 await ws.send(json.dumps({
                     "method": "subscribe",
                     "subscription": {"type": "candle", "coin": coin, "interval": tf}
                 }))
+                await asyncio.sleep(SUBSCRIBE_THROTTLE_S)
             await ws.send(json.dumps({
                 "method": "subscribe",
                 "subscription": {"type": "l2Book", "coin": coin, "nSigFigs": 5}
             }))
+            await asyncio.sleep(SUBSCRIBE_THROTTLE_S)
             await ws.send(json.dumps({
                 "method": "subscribe",
                 "subscription": {"type": "trades", "coin": coin}
             }))
-        print(f"[COLLECTOR] Abonne: {', '.join(COINS)} (candles + orderbook + trades)")
+            await asyncio.sleep(SUBSCRIBE_THROTTLE_S)
+        print(f"[COLLECTOR] Abonne: {', '.join(coins)} (candles + orderbook + trades)")
 
     async def process_message(self, message):
         try:
@@ -333,14 +344,19 @@ class WebSocketCollector:
             for coin in COINS:
                 self._flush_trade_buffer(coin)
 
-    async def collect(self):
+    async def _collect_shard(self, coins):
+        """Boucle connect/subscribe/read pour UN shard de coins.
+
+        Chaque shard a sa propre connexion WS et reconnecte indépendamment :
+        un shard qui tombe n'interrompt pas la collecte des autres coins.
+        """
+        label = f"{coins[0]}…{coins[-1]}" if len(coins) > 1 else coins[0]
         while self._running:
             try:
                 async with websockets.connect(WS_URL, ping_interval=None) as ws:
-                    print("[COLLECTOR] WebSocket connecte.")
-                    await self.subscribe(ws)
+                    print(f"[COLLECTOR] WebSocket connecte (shard {label}).")
+                    await self.subscribe(ws, coins)
                     heartbeat_task = asyncio.create_task(self.heartbeat_ws(ws))
-                    flush_task = asyncio.create_task(self.periodic_flush())
                     try:
                         async for message in ws:
                             if not self._running:
@@ -348,11 +364,21 @@ class WebSocketCollector:
                             await self.process_message(message)
                     finally:
                         heartbeat_task.cancel()
-                        flush_task.cancel()
             except Exception as e:
-                print(f"[COLLECTOR][ERREUR] Deconnexion WebSocket: {e}")
+                print(f"[COLLECTOR][ERREUR] Deconnexion WebSocket (shard {label}): {e}")
                 if self._running:
                     await asyncio.sleep(5)
+
+    async def collect(self):
+        """Lance une connexion WS par shard de WS_SHARD_SIZE coins + le flush."""
+        shards = [COINS[i:i + WS_SHARD_SIZE] for i in range(0, len(COINS), WS_SHARD_SIZE)]
+        print(f"[COLLECTOR] {len(COINS)} coins sur {len(shards)} connexions WS "
+              f"(max {WS_SHARD_SIZE * 5} souscriptions/connexion)")
+        flush_task = asyncio.create_task(self.periodic_flush())
+        try:
+            await asyncio.gather(*[self._collect_shard(shard) for shard in shards])
+        finally:
+            flush_task.cancel()
 
 
 if __name__ == "__main__":
