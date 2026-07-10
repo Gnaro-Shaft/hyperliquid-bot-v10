@@ -72,7 +72,8 @@ def main():
     parser.add_argument("--max-age", type=int, default=COLLECTOR_SILENT_ALERT_SEC,
                         help="Âge max (s) d'un heartbeat avant alerte")
     parser.add_argument("--force-alert", action="store_true",
-                        help="Ignore l'anti-spam (test de la chaîne d'alerte)")
+                        help="Envoie un Telegram même si tout va bien "
+                             "(test bout-en-bout de la chaîne d'alerte)")
     args = parser.parse_args()
 
     if not MONGO_URL:
@@ -99,6 +100,11 @@ def main():
         print("[WATCHDOG] ✅ collecte OK")
         if state.get("unhealthy"):
             notifier.send("🛰️ ✅ <b>WATCHDOG EXTERNE — collecte rétablie</b>")
+        elif args.force_alert:
+            # Test bout-en-bout : machine locale → Mongo → Telegram
+            notifier.send("🛰️ 🧪 <b>WATCHDOG EXTERNE — test de la chaîne d'alerte</b>\n"
+                          "Tout est vert : heartbeats frais, bot_status à jour. "
+                          "Ce message confirme que le chemin externe fonctionne.")
         _save_state({"unhealthy": False, "ts": time.time()})
         sys.exit(0)
 
