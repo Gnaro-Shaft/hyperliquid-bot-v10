@@ -1,14 +1,15 @@
 """
-PaperTrader V10 — trading simulé sans aucun ordre réel (porté de v8.11).
+PaperTrader V10 — trading simulé sans aucun ordre réel, MULTI-POSITIONS.
 
-Reçoit les VRAIS prix (lus depuis MongoDB, alimenté par le collector en temps
-réel) mais ne touche jamais l'exchange : positions, TP/SL et PnL sont simulés.
-Interface compatible avec HyperliquidTrader pour les méthodes utilisées par main.py.
+Reçoit les VRAIS prix (bougies 1m du collector dans MongoDB) mais ne touche
+jamais l'exchange : positions, TP/SL et PnL sont simulés. Interface compatible
+avec HyperliquidTrader pour les méthodes utilisées par main.py.
 
-Évolutions V10 :
-  - arrondi des prix en chiffres significatifs (coins micro : PEPE, WIF...) ;
-  - journal via TradeLogger (collection paper_trades) avec `context`
-    (signal_id + snapshot features) → lien trade ↔ signal.
+RÉÉCRIT le 11/07/2026 — bug v8 hérité : un SEUL slot de position + fills
+simulés avec la bougie de `self.pair` (la paire COURANTE de la boucle bot,
+qui change à chaque coin). Une position INJ se faisait « remplir » par la
+bougie de BTC : tout long finissait TP, tout short finissait SL, en secondes.
+Ici : une position PAR paire, chaque fill simulé avec la bougie de SA paire.
 """
 
 import time
@@ -34,18 +35,18 @@ def _gross(side, entry, exit_price, size):
 
 class PaperTrader:
     def __init__(self):
-        self.pair = None
+        self.pair = None                 # paire COURANTE (fixée par main.py à chaque cycle)
         self.notifier = Notifier()
         self.balance = PAPER_START_BALANCE
-        self.position = None        # {side, entry, size, tp_price, sl_price, open_ts, pair}
-        self.last_closed = None
+        self.positions = {}              # {pair: {side, entry, size, tp_price, sl_price, ...}}
+        self.last_closed = {}            # {pair: {price, amount, side, timestamp}}
         self.db = None
         self._connect()
         self.logger = TradeLogger(collection=MONGO_COLLECTION_PAPER_TRADES,
                                   mongo_db=self.db)
         self._load_state()
         print(f"[PAPER] 📝 MODE PAPER TRADING actif — solde simulé {self.balance:.2f} USDC "
-              f"(aucun ordre réel n'est envoyé)")
+              f"| {len(self.positions)} position(s) restaurée(s)")
 
     # ── MongoDB ───────────────────────────────────────────────
     def _connect(self):
@@ -61,10 +62,13 @@ class PaperTrader:
             st = self.db[MONGO_COLLECTION_PAPER_STATE].find_one({"_id": "current"})
             if st:
                 self.balance = st.get("balance", self.balance)
-                self.position = st.get("position")
-                self.pair = st.get("pair")
+                self.positions = st.get("positions") or {}
+                # Migration ancien format mono-position {"position": {...}, "pair": ...}
+                old = st.get("position")
+                if old and old.get("pair") and old["pair"] not in self.positions:
+                    self.positions[old["pair"]] = old
                 print(f"[PAPER] État restauré — solde {self.balance:.2f} | "
-                      f"position={'oui' if self.position else 'non'}")
+                      f"positions: {list(self.positions) or 'aucune'}")
         except Exception as e:
             print(f"[PAPER] load_state: {e}")
 
@@ -74,29 +78,30 @@ class PaperTrader:
         try:
             self.db[MONGO_COLLECTION_PAPER_STATE].replace_one(
                 {"_id": "current"},
-                {"_id": "current", "balance": self.balance, "position": self.position,
-                 "pair": self.pair, "updated_at": datetime.now(timezone.utc).isoformat()},
+                {"_id": "current", "balance": self.balance, "positions": self.positions,
+                 "updated_at": datetime.now(timezone.utc).isoformat()},
                 upsert=True,
             )
         except Exception as e:
             print(f"[PAPER] save_state: {e}")
 
-    def _coin(self):
-        return self.pair.split("/")[0] if self.pair else None
+    @staticmethod
+    def _coin_of(pair):
+        return pair.split("/")[0] if pair else None
 
-    def _latest_candle(self):
-        """Dernière bougie 1m (high/low/close) du coin courant, depuis Mongo."""
-        if self.db is None or not self.pair:
+    def _latest_candle(self, pair):
+        """Dernière bougie 1m (high/low/close) du coin de CETTE paire."""
+        if self.db is None or not pair:
             return None
         try:
             doc = self.db[MONGO_COLLECTION_1M].find_one(
-                {"coin": self._coin()}, sort=[("timestamp", -1)])
+                {"coin": self._coin_of(pair)}, sort=[("timestamp", -1)])
             if not doc:
                 return None
             return {"high": float(doc["high"]), "low": float(doc["low"]),
                     "close": float(doc["close"])}
         except Exception as e:
-            print(f"[PAPER] latest_candle: {e}")
+            print(f"[PAPER] latest_candle({pair}): {e}")
             return None
 
     # ── Solde / sizing (mêmes formules que le réel) ───────────
@@ -109,11 +114,14 @@ class PaperTrader:
     def get_position_size(self, price):
         return round((self.get_usable_balance() * POSITION_SIZE_PCT) / price, 6) if price else 0
 
-    # ── Ouverture ─────────────────────────────────────────────
+    # ── Ouverture (sur la paire courante) ─────────────────────
     def place_order_with_tp_sl(self, side, price, tp_pct=None, sl_pct=None,
                                size_factor=1.0, context=None):
         if not self.pair:
             print("[PAPER] Aucune paire sélectionnée")
+            return None
+        if self.pair in self.positions:
+            print(f"[PAPER] Position déjà ouverte sur {self.pair} — refus")
             return None
         size = round(self.get_position_size(price) * max(0.3, min(1.0, size_factor)), 6)
         if size <= 0:
@@ -125,7 +133,7 @@ class PaperTrader:
         tp_price, sl_price = compute_tp_sl(side, price, tp_pct, sl_pct)
         tp_price, sl_price = round_price_sig(tp_price), round_price_sig(sl_price)
 
-        self.position = {
+        self.positions[self.pair] = {
             "side": side, "entry": price, "size": size,
             "tp_price": tp_price, "sl_price": sl_price,
             "open_ts": int(time.time() * 1000), "pair": self.pair,
@@ -147,33 +155,36 @@ class PaperTrader:
                 "tp_price": tp_price, "sl_price": sl_price,
                 "tp_order_id": "paper", "sl_order_id": "paper"}
 
-    # ── Clôture TP/SL simulée (détectée par has_open_position) ──
-    def _maybe_close_on_price(self):
-        if not self.position:
+    # ── Clôture TP/SL simulée — chaque position avec SA bougie ──
+    def _maybe_close_on_price(self, pair):
+        pos = self.positions.get(pair)
+        if not pos:
             return False
-        candle = self._latest_candle()
+        candle = self._latest_candle(pair)
         if not candle:
             return False
-        closed, exit_price, reason = simulate_candle_fill(self.position, candle)
+        closed, exit_price, reason = simulate_candle_fill(pos, candle)
         if not closed:
             return False
-        pos = self.position
         pnl = _gross(pos["side"], pos["entry"], exit_price, pos["size"])
         self.balance += pnl
-        self.last_closed = {"price": exit_price, "amount": pos["size"],
-                            "side": pos["side"], "timestamp": int(time.time() * 1000)}
+        self.last_closed[pair] = {"price": exit_price, "amount": pos["size"],
+                                  "side": pos["side"],
+                                  "timestamp": int(time.time() * 1000)}
         # On NE log PAS ici : le bot loggue la clôture via _handle_exchange_closure
-        self.position = None
+        del self.positions[pair]
         self._save_state()
         return True
 
-    # ── Interface attendue par main.py ────────────────────────
+    # ── Interface attendue par main.py (répond pour la paire COURANTE) ──
     def has_open_position(self):
-        self._maybe_close_on_price()        # simule l'exécution TP/SL par l'« exchange »
-        if not self.position:
+        if not self.pair:
             return False, None
-        p = self.position
-        candle = self._latest_candle()
+        self._maybe_close_on_price(self.pair)   # simule l'exécution TP/SL de CETTE paire
+        p = self.positions.get(self.pair)
+        if not p:
+            return False, None
+        candle = self._latest_candle(self.pair)
         mark = candle["close"] if candle else p["entry"]
         return True, {"side": "long" if p["side"] == "buy" else "short",
                       "entry_price": p["entry"], "contracts": p["size"],
@@ -181,15 +192,16 @@ class PaperTrader:
                       "unrealized_pnl": _gross(p["side"], p["entry"], mark, p["size"])}
 
     def close_position(self, reason="manual", context=None):
-        if not self.position:
+        pos = self.positions.get(self.pair)
+        if not pos:
             return None
-        candle = self._latest_candle()
-        exit_price = candle["close"] if candle else self.position["entry"]
-        pos = self.position
+        candle = self._latest_candle(self.pair)
+        exit_price = candle["close"] if candle else pos["entry"]
         pnl = _gross(pos["side"], pos["entry"], exit_price, pos["size"])
         self.balance += pnl
-        self.last_closed = {"price": exit_price, "amount": pos["size"],
-                            "side": pos["side"], "timestamp": int(time.time() * 1000)}
+        self.last_closed[self.pair] = {"price": exit_price, "amount": pos["size"],
+                                       "side": pos["side"],
+                                       "timestamp": int(time.time() * 1000)}
         merged_ctx = dict(context or {})
         merged_ctx.setdefault("signal_id", pos.get("signal_id"))
         self.logger.log_trade({"pair": pos["pair"], "side": pos["side"], "action": "close",
@@ -205,19 +217,21 @@ class PaperTrader:
             pass
         print(f"[PAPER] Clôture {reason} {pos['entry']:.6g}→{exit_price:.6g} | "
               f"PnL {pnl:+.4f} | solde {self.balance:.2f}")
-        self.position = None
+        del self.positions[self.pair]
         self._save_state()
         return {"pnl": pnl, "order": {"id": "paper"}}
 
     def update_sl(self, new_sl_price, old_sl_order_id=None):
-        if self.position:
-            self.position["sl_price"] = round_price_sig(new_sl_price)
+        pos = self.positions.get(self.pair)
+        if pos:
+            pos["sl_price"] = round_price_sig(new_sl_price)
             self._save_state()
         return {"id": "paper"}
 
     def update_tp(self, new_tp_price, old_tp_order_id=None):
-        if self.position:
-            self.position["tp_price"] = round_price_sig(new_tp_price)
+        pos = self.positions.get(self.pair)
+        if pos:
+            pos["tp_price"] = round_price_sig(new_tp_price)
             self._save_state()
         return {"id": "paper"}
 
@@ -228,7 +242,7 @@ class PaperTrader:
         return []
 
     def get_last_closed_trade(self, since_ms=None):
-        return self.last_closed
+        return self.last_closed.get(self.pair)
 
     def select_pair(self):
         if not self.pair:
