@@ -41,6 +41,7 @@ from strategy.strategy_engine import StrategyEngine
 from trader.ccxt_trader import HyperliquidTrader
 from trader.paper_trader import PaperTrader
 from collector.context_store import MarketContextStore
+from collector.candle_store import CandleStore
 from collector.websocket_collector import WebSocketCollector
 from collector.rest_collector import RestCollector
 from collector.whale_collector import WhaleCollector
@@ -60,11 +61,13 @@ COINS = [p.split("/")[0] for p in PAIRS]
 
 class TradingBot:
     def __init__(self):
-        # ── Plomberie V10 : store de contexte partagé + logger de signaux ──
+        # ── Plomberie V10 : stores partagés + logger de signaux ──
         self.context_store = MarketContextStore(COINS)
+        self.candle_store = CandleStore(COINS)   # cache bougies (anti-throttle M0)
         self.signal_logger = SignalLogger()
 
-        self.collector = WebSocketCollector(context_store=self.context_store)
+        self.collector = WebSocketCollector(context_store=self.context_store,
+                                            candle_store=self.candle_store)
         self.rest_collector = RestCollector(context_store=self.context_store)
         self.whale_collector = WhaleCollector() if WHALE_ENABLED else None
         self.trader = PaperTrader() if PAPER_MODE else HyperliquidTrader()
@@ -149,6 +152,7 @@ class TradingBot:
                 coin=coin,
                 context_store=self.context_store,
                 signal_logger=self.signal_logger,
+                candle_store=self.candle_store,
             )
 
         # Healthcheck autonome — surveillance + alertes Telegram sur transition

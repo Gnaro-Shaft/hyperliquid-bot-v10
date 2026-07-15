@@ -43,9 +43,10 @@ SUBSCRIBE_THROTTLE_S = 0.05   # petite pause entre les sends de souscription
 
 
 class WebSocketCollector:
-    def __init__(self, context_store=None):
+    def __init__(self, context_store=None, candle_store=None):
         self.mongo = None
         self.context_store = context_store
+        self.candle_store = candle_store
         if MONGO_URL:
             try:
                 client = MongoClient(MONGO_URL)
@@ -178,6 +179,10 @@ class WebSocketCollector:
         self.last_candle_time = now
         self._last_candle_time[coin] = now
         self._live_prices[coin] = bougie["close"]
+
+        # Cache mémoire : le moteur lit ici, plus dans Mongo (anti-throttle M0)
+        if self.candle_store is not None:
+            self.candle_store.update(coin, tf, bougie)
 
         if self._mongo_connected:
             col = MONGO_COLLECTION_1M if tf == "1m" else (MONGO_COLLECTION_15M if tf == "15m" else MONGO_COLLECTION_1H)

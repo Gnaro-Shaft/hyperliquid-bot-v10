@@ -49,11 +49,13 @@ def _f(val):
 
 
 class StrategyEngine:
-    def __init__(self, coin="BTC", context_store=None, signal_logger=None):
+    def __init__(self, coin="BTC", context_store=None, signal_logger=None,
+                 candle_store=None):
         client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
         self.mongo = client[MONGO_DB]
         self.coin = coin
         self.context_store = context_store
+        self.candle_store = candle_store
         self.signal_logger = signal_logger or SignalLogger()
 
         # Filtre ML optionnel (chargé si le module/modèle existe)
@@ -87,6 +89,23 @@ class StrategyEngine:
         }
 
     def get_last_n_candles(self, n=100, tf="1m"):
+        """Bougies via le CandleStore mémoire (V10) — Mongo en secours.
+
+        v8 relisait Mongo à chaque évaluation (~3,5 GB/j de lecture Atlas →
+        throttling M0 constaté le 14/07). Le cache est alimenté en temps réel
+        par le WS ; en cas de trou (démarrage à froid), on requête Mongo UNE
+        fois et on re-seed le cache — les cycles suivants restent en mémoire.
+        """
+        from collector.candle_store import LIMITS
+        if self.candle_store is not None:
+            want = min(n, LIMITS.get(tf, n))
+            rows = self.candle_store.get_last_n(self.coin, tf, n)
+            if len(rows) >= want:
+                df = pd.DataFrame(rows)
+                for c in ["open", "high", "low", "close", "volume"]:
+                    df[c] = df[c].astype(float)
+                return df
+
         if tf == "1m":
             col = MONGO_COLLECTION_1M
         elif tf == "15m":
@@ -95,6 +114,8 @@ class StrategyEngine:
             col = MONGO_COLLECTION_1H
         cursor = self.mongo[col].find({"coin": self.coin}).sort("timestamp", -1).limit(n)
         data = list(cursor)
+        if self.candle_store is not None and data:
+            self.candle_store.seed_many(self.coin, tf, data)   # auto-cicatrisation
         if not data:
             return pd.DataFrame()
         df = pd.DataFrame(reversed(data))
