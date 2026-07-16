@@ -252,35 +252,7 @@
             "refId": "A",
             "collection": "signal_evaluations",
             "queryLanguage": "json",
-            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"raw_score\": 1}}]"
-          }
-        ],
-        "transformations": [
-          {
-            "id": "convertFieldType",
-            "options": {
-              "conversions": [
-                {
-                  "targetField": "ts",
-                  "destinationType": "time"
-                }
-              ]
-            }
-          },
-          {
-            "id": "partitionByValues",
-            "options": {
-              "fields": [
-                "coin"
-              ]
-            }
-          },
-          {
-            "id": "renameByRegex",
-            "options": {
-              "regex": "^(?:raw_score|funding_rate|spread_pct|notionnel) (.+)$",
-              "renamePattern": "$1"
-            }
+            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$addFields\": {\"__v\": \"$raw_score\", \"__b\": {\"$floor\": {\"$divide\": [{\"$subtract\": [\"$timestamp\", ${__from}]}, {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}}}}, {\"$group\": {\"_id\": {\"b\": \"$__b\", \"coin\": \"$coin\"}, \"v\": {\"$avg\": \"$__v\"}}}, {\"$group\": {\"_id\": \"$_id.b\", \"kv\": {\"$push\": {\"k\": \"$_id.coin\", \"v\": {\"$round\": [\"$v\", 2]}}}}}, {\"$replaceRoot\": {\"newRoot\": {\"$mergeObjects\": [{\"ts\": {\"$toDate\": {\"$add\": [${__from}, {\"$multiply\": [\"$_id\", {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}]}}}, {\"$arrayToObject\": \"$kv\"}]}}}, {\"$sort\": {\"ts\": 1}}]"
           }
         ],
         "fieldConfig": {
@@ -312,35 +284,7 @@
             "refId": "A",
             "collection": "funding_rates",
             "queryLanguage": "json",
-            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"funding_rate\": 1}}]"
-          }
-        ],
-        "transformations": [
-          {
-            "id": "convertFieldType",
-            "options": {
-              "conversions": [
-                {
-                  "targetField": "ts",
-                  "destinationType": "time"
-                }
-              ]
-            }
-          },
-          {
-            "id": "partitionByValues",
-            "options": {
-              "fields": [
-                "coin"
-              ]
-            }
-          },
-          {
-            "id": "renameByRegex",
-            "options": {
-              "regex": "^(?:raw_score|funding_rate|spread_pct|notionnel) (.+)$",
-              "renamePattern": "$1"
-            }
+            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$addFields\": {\"__v\": \"$funding_rate\", \"__b\": {\"$floor\": {\"$divide\": [{\"$subtract\": [\"$timestamp\", ${__from}]}, {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}}}}, {\"$group\": {\"_id\": {\"b\": \"$__b\", \"coin\": \"$coin\"}, \"v\": {\"$avg\": \"$__v\"}}}, {\"$group\": {\"_id\": \"$_id.b\", \"kv\": {\"$push\": {\"k\": \"$_id.coin\", \"v\": {\"$round\": [\"$v\", 8]}}}}}, {\"$replaceRoot\": {\"newRoot\": {\"$mergeObjects\": [{\"ts\": {\"$toDate\": {\"$add\": [${__from}, {\"$multiply\": [\"$_id\", {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}]}}}, {\"$arrayToObject\": \"$kv\"}]}}}, {\"$sort\": {\"ts\": 1}}]"
           }
         ],
         "fieldConfig": {
@@ -372,35 +316,7 @@
             "refId": "A",
             "collection": "orderbook_snapshots",
             "queryLanguage": "json",
-            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"spread_pct\": 1}}]"
-          }
-        ],
-        "transformations": [
-          {
-            "id": "convertFieldType",
-            "options": {
-              "conversions": [
-                {
-                  "targetField": "ts",
-                  "destinationType": "time"
-                }
-              ]
-            }
-          },
-          {
-            "id": "partitionByValues",
-            "options": {
-              "fields": [
-                "coin"
-              ]
-            }
-          },
-          {
-            "id": "renameByRegex",
-            "options": {
-              "regex": "^(?:raw_score|funding_rate|spread_pct|notionnel) (.+)$",
-              "renamePattern": "$1"
-            }
+            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$addFields\": {\"__v\": \"$spread_pct\", \"__b\": {\"$floor\": {\"$divide\": [{\"$subtract\": [\"$timestamp\", ${__from}]}, {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}}}}, {\"$group\": {\"_id\": {\"b\": \"$__b\", \"coin\": \"$coin\"}, \"v\": {\"$avg\": \"$__v\"}}}, {\"$group\": {\"_id\": \"$_id.b\", \"kv\": {\"$push\": {\"k\": \"$_id.coin\", \"v\": {\"$round\": [\"$v\", 7]}}}}}, {\"$replaceRoot\": {\"newRoot\": {\"$mergeObjects\": [{\"ts\": {\"$toDate\": {\"$add\": [${__from}, {\"$multiply\": [\"$_id\", {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}]}}}, {\"$arrayToObject\": \"$kv\"}]}}}, {\"$sort\": {\"ts\": 1}}]"
           }
         ],
         "fieldConfig": {
@@ -433,35 +349,7 @@
             "refId": "A",
             "collection": "liquidation_clusters",
             "queryLanguage": "json",
-            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$sort\": {\"timestamp\": 1}}, {\"$project\": {\"_id\": 0, \"ts\": {\"$toDate\": \"$timestamp\"}, \"coin\": 1, \"notionnel\": {\"$sum\": \"$clusters.notional\"}}}]"
-          }
-        ],
-        "transformations": [
-          {
-            "id": "convertFieldType",
-            "options": {
-              "conversions": [
-                {
-                  "targetField": "ts",
-                  "destinationType": "time"
-                }
-              ]
-            }
-          },
-          {
-            "id": "partitionByValues",
-            "options": {
-              "fields": [
-                "coin"
-              ]
-            }
-          },
-          {
-            "id": "renameByRegex",
-            "options": {
-              "regex": "^(?:raw_score|funding_rate|spread_pct|notionnel) (.+)$",
-              "renamePattern": "$1"
-            }
+            "queryText": "[{\"$match\": {\"timestamp\": {\"$gte\": ${__from}, \"$lte\": ${__to}}}}, {\"$addFields\": {\"__v\": {\"$sum\": \"$clusters.notional\"}, \"__b\": {\"$floor\": {\"$divide\": [{\"$subtract\": [\"$timestamp\", ${__from}]}, {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}}}}, {\"$group\": {\"_id\": {\"b\": \"$__b\", \"coin\": \"$coin\"}, \"v\": {\"$avg\": \"$__v\"}}}, {\"$group\": {\"_id\": \"$_id.b\", \"kv\": {\"$push\": {\"k\": \"$_id.coin\", \"v\": {\"$round\": [\"$v\", 0]}}}}}, {\"$replaceRoot\": {\"newRoot\": {\"$mergeObjects\": [{\"ts\": {\"$toDate\": {\"$add\": [${__from}, {\"$multiply\": [\"$_id\", {\"$max\": [60000, {\"$floor\": {\"$divide\": [{\"$subtract\": [${__to}, ${__from}]}, 300]}}]}]}]}}}, {\"$arrayToObject\": \"$kv\"}]}}}, {\"$sort\": {\"ts\": 1}}]"
           }
         ],
         "fieldConfig": {
@@ -478,5 +366,5 @@
     ]
   },
   "overwrite": true,
-  "message": "Heartbeats: charge relative par flux; donut régimes: rowsToFields"
+  "message": "Timeseries pivotées côté Mongo (300 buckets max, zéro transformation client)"
 }
