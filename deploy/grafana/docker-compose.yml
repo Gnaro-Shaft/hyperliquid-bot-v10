@@ -1,7 +1,10 @@
-# Grafana V10 — dashboard de la collecte (homeserv01, port 3002)
+# Grafana V10 — dashboard de la collecte (docker-stack, port 3002)
 #
 # Lancement (depuis ~/V10) :
-#   docker compose --env-file .env -f deploy/grafana/docker-compose.yml up -d
+#   docker compose --env-file .env -f docker-compose.yml up -d
+#
+# Déployé sur docker-stack (tailnet) depuis le 05/09/2026 — homeserv01,
+# l'hôte d'origine, a disparu lors de la migration Proxmox du 22/08.
 #
 # Datasource : MongoDB Atlas (plugin communautaire haohanyang-mongodb-datasource)
 # → visualise le buffer chaud (4 jours). L'historique long vit en Parquet ;
@@ -13,7 +16,10 @@ services:
     container_name: v10-grafana
     restart: unless-stopped
     ports:
-      - "3002:3000"
+      # Publié sur l'IP tailnet uniquement (convention docker-stack) : joignable
+      # depuis le tailnet, invisible depuis Internet. Défaut volontairement
+      # restrictif — 127.0.0.1 si GRAFANA_BIND_IP n'est pas défini.
+      - "${GRAFANA_BIND_IP:-127.0.0.1}:3002:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-v10-collect}
