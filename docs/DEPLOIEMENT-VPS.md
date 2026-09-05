@@ -95,18 +95,17 @@ Le code de sortie 1 signifie « des jours n'ont pas été purgés faute d'archiv
 complète ». C'est volontairement traité comme un échec : l'alerte Telegram part.
 Un avertissement récurrent signale que l'export ne suit pas.
 
-### L'archive est scindée — à consolider
+### Archive consolidée sur le VPS (05/09/2026)
 
-Le VPS purge d'après **son propre** `PARQUET_DIR` (`/opt/v10/data/parquet`), qui
-ne contient que ce qu'il a exporté depuis le 05/09/2026. L'archive historique
-(10/07 → 22/08, 5,35 M lignes) vit sur le Mac, avec copie sur homeserv02.
+`/opt/v10/data/parquet` porte désormais **l'archive complète** : 4 657 fichiers,
+547 Mo, du 09/07 au 05/09, **5 415 300 lignes**. Transfert vérifié par
+`rsync --checksum` — aucune divergence.
 
-Conséquence : le VPS ne peut purger que ce qu'il a lui-même archivé. Les
-partitions du 21-22/08 ont dû être copiées à la main pour débloquer 681
-documents restés en base.
+Elle était auparavant scindée : historique sur le Mac, courant sur le VPS. Le
+VPS ne pouvait donc purger que ce qu'il avait lui-même archivé, ce qui a obligé
+à copier à la main les partitions du 21-22/08 pour débloquer 681 documents.
 
-**Décision en attente** : consolider l'archive au même endroit — le plus logique
-étant le VPS, qui la produit désormais, avec sauvegarde vers homeserv02.
+La copie du Mac (`~/V10-archive/parquet`) est conservée telle quelle.
 
 ## Ce qui ne doit PAS tourner sur le VPS
 
