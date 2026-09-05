@@ -2,13 +2,13 @@ import time
 import os
 from datetime import datetime, timezone
 
-from pymongo import MongoClient
+from utils.mongo import get_db
 from config import (
     MAX_CONSECUTIVE_LOSSES,
     PAUSE_DURATION_MINUTES,
     MAX_DAILY_DRAWDOWN_PCT,
     KILL_SWITCH_FILE,
-    MONGO_URL, MONGO_DB,
+    MONGO_URL,
     DEBUG,
 )
 
@@ -28,8 +28,7 @@ class RiskManager:
         self.mongo = None
         if MONGO_URL:
             try:
-                client = MongoClient(MONGO_URL)
-                self.mongo = client[MONGO_DB]
+                self.mongo = get_db()
                 self._load_state()
             except Exception as e:
                 print(f"[RISK] MongoDB erreur: {e}")

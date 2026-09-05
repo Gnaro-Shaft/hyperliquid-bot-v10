@@ -13,11 +13,11 @@ et les TP/SL dynamiques sont IDENTIQUES à v8. Seule la PLOMBERIE change :
 """
 
 import pandas as pd
-from pymongo import MongoClient
+from utils.mongo import get_db
 from datetime import datetime, timezone
 
 from config import (
-    MONGO_URL, MONGO_DB, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M, MONGO_COLLECTION_1H,
+    MONGO_URL, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M, MONGO_COLLECTION_1H,
     LEVELS, SL_PCT, TP_PCT, MIN_TP_PCT, DEBUG, SIGNAL_THRESHOLD_DEFAULT,
     REGIME_ADAPTIVE, REGIME_HIGH_VOL_ATR_PCT,
 )
@@ -51,8 +51,7 @@ def _f(val):
 class StrategyEngine:
     def __init__(self, coin="BTC", context_store=None, signal_logger=None,
                  candle_store=None):
-        client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
-        self.mongo = client[MONGO_DB]
+        self.mongo = get_db()
         self.coin = coin
         self.context_store = context_store
         self.candle_store = candle_store

@@ -16,10 +16,10 @@ import time
 import traceback
 from datetime import datetime, timezone
 
-from pymongo import MongoClient
+from utils.mongo import get_db
 
 from config import (
-    MONGO_URL, MONGO_DB, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M,
+    MONGO_URL, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M,
     MONGO_COLLECTION_BOT_STATUS, MONGO_COLLECTION_HEARTBEATS, KILL_SWITCH_FILE,
     HEALTH_CHECK_INTERVAL_SEC, HEALTH_MAX_1M_AGE_SEC,
     HEALTH_MAX_15M_AGE_SEC, HEALTH_MAX_CONSEC_ERRORS,
@@ -73,7 +73,6 @@ class HealthMonitor:
     def __init__(self, bot, notifier=None):
         self.bot = bot
         self.notifier = notifier
-        self._client = None
         self._unhealthy = False          # état précédent (alerte sur transition)
         self.thresholds = {
             "max_1m_age_s": HEALTH_MAX_1M_AGE_SEC,
@@ -82,9 +81,7 @@ class HealthMonitor:
         }
 
     def _db(self):
-        if self._client is None:
-            self._client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
-        return self._client[MONGO_DB]
+        return get_db()
 
     def _last_age_s(self, db, collection) -> float:
         """Âge (s) de la bougie la plus récente, ou None si introuvable."""

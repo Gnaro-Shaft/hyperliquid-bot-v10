@@ -17,9 +17,10 @@ Clé de jointure : (coin, valid_from) ou agent_output_id côté trades/signaux.
 import uuid
 from datetime import datetime, timezone
 
-from pymongo import MongoClient, ASCENDING
+from pymongo import ASCENDING
+from utils.mongo import get_db, ping
 
-from config import MONGO_URL, MONGO_DB, MONGO_COLLECTION_AGENT_OUTPUTS
+from config import MONGO_URL, MONGO_COLLECTION_AGENT_OUTPUTS
 
 
 def _utc_now_ms():
@@ -51,9 +52,8 @@ class AgentOutputLogger:
         self.ready = False
         if self.db is None and MONGO_URL:
             try:
-                client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
-                client.admin.command("ping")
-                self.db = client[MONGO_DB]
+                ping()
+                self.db = get_db()
             except Exception as e:
                 print(f"[AGENT_HOOKS][ERREUR] MongoDB: {e}")
         if self.db is not None:

@@ -16,7 +16,6 @@ import threading
 import asyncio
 from datetime import datetime, timezone
 
-from pymongo import MongoClient
 
 from config import (
     PAIRS, DEBUG, TP_PCT, SL_PCT, TRAIL_PCT, PAPER_MODE,
@@ -31,7 +30,7 @@ from config import (
     PULLBACK_PCT, PULLBACK_EXPIRY_SEC,
     AUTOCAL_LOOKBACK_TRADES, SIGNAL_THRESHOLD_DEFAULT,
     SIGNAL_THRESHOLD_MIN, SIGNAL_THRESHOLD_MAX,
-    MONGO_URL, MONGO_DB, MONGO_COLLECTION_TRADES, MONGO_COLLECTION_DECISIONS,
+    MONGO_URL, MONGO_COLLECTION_TRADES, MONGO_COLLECTION_DECISIONS,
     MONGO_COLLECTION_FUNDING, MONGO_COLLECTION_OI, MONGO_COLLECTION_ORDERBOOK,
     COOLDOWN_BASE_SEC, COOLDOWN_MIN_SEC, COOLDOWN_MAX_SEC,
     COOLDOWN_LOSS_MULT, COOLDOWN_WIN_MULT,
@@ -47,6 +46,7 @@ from collector.rest_collector import RestCollector
 from collector.whale_collector import WhaleCollector
 from datalog.signal_logger import SignalLogger
 from risk.risk_manager import RiskManager
+from utils import mongo
 from utils.notifier import Notifier
 from utils.sizing import size_factor
 from utils.reporting import daily_report_window
@@ -121,7 +121,7 @@ class TradingBot:
 
         # Amorcer le carry-forward depuis Mongo (dernières valeurs connues)
         try:
-            db = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)[MONGO_DB]
+            db = mongo.get_db()
             self.context_store.seed_from_mongo(
                 db, MONGO_COLLECTION_FUNDING, MONGO_COLLECTION_OI,
                 MONGO_COLLECTION_ORDERBOOK)
@@ -597,10 +597,8 @@ class TradingBot:
         return False, 0.0
 
     def _decisions_col(self):
-        """Collection Mongo du journal de décision (client mis en cache)."""
-        if getattr(self, "_dec_client", None) is None:
-            self._dec_client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
-        return self._dec_client[MONGO_DB][MONGO_COLLECTION_DECISIONS]
+        """Collection Mongo du journal de décision."""
+        return mongo.get_db()[MONGO_COLLECTION_DECISIONS]
 
     def _log_decision(self, coin, sig, side, action, reason, price, size_factor=None):
         """Journalise une décision d'entrée (acceptée/refusée) en Mongo."""
@@ -858,8 +856,7 @@ class TradingBot:
     def _send_daily_report(self):
         """Envoie un résumé journalier Telegram (trades, PnL, win rate)."""
         try:
-            client = MongoClient(MONGO_URL)
-            db = client[MONGO_DB]
+            db = mongo.get_db()
             day_start_ms, today_start_ms, day_label = daily_report_window(
                 datetime.now(timezone.utc)
             )
@@ -903,8 +900,7 @@ class TradingBot:
     def _auto_calibrate(self):
         """Ajuste le seuil de signal selon les performances récentes."""
         try:
-            client = MongoClient(MONGO_URL)
-            db = client[MONGO_DB]
+            db = mongo.get_db()
             trades = list(db[MONGO_COLLECTION_TRADES].find(
                 {"action": "close"}
             ).sort("timestamp", -1).limit(AUTOCAL_LOOKBACK_TRADES))
@@ -953,8 +949,7 @@ class TradingBot:
             return False
         for attempt in range(3):
             try:
-                client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
-                client.admin.command("ping")
+                mongo.ping()
                 print("[BOT] ✅ MongoDB joignable.")
                 return True
             except Exception as e:
@@ -1021,6 +1016,7 @@ class TradingBot:
         self.notifier.bot_stopped(
             f"PnL jour: {risk_status['pnl_today']:+.2f} | Solde: {balance:.2f}"
         )
+        mongo.close()
         print("[BOT] Arrêt complet.")
 
 

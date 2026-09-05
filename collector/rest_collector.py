@@ -9,10 +9,11 @@ Poll l'API REST Hyperliquid toutes les DL_REST_INTERVAL secondes.
 """
 import time
 import requests
-from pymongo import MongoClient, ASCENDING
+from pymongo import ASCENDING
+from utils.mongo import get_db
 
 from config import (
-    COLLECT_PAIRS, MONGO_URL, MONGO_DB,
+    COLLECT_PAIRS, MONGO_URL,
     MONGO_COLLECTION_FUNDING, MONGO_COLLECTION_OI, MONGO_COLLECTION_HEARTBEATS,
     DL_REST_INTERVAL,
 )
@@ -28,8 +29,7 @@ class RestCollector:
         self.context_store = context_store
         if MONGO_URL:
             try:
-                client = MongoClient(MONGO_URL)
-                self.mongo = client[MONGO_DB]
+                self.mongo = get_db()
                 self._ensure_indexes()
                 print("[REST_COLLECTOR] MongoDB connecte.")
             except Exception as e:

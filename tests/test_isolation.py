@@ -15,10 +15,10 @@ def test_mongoclient_direct_est_interdit():
 
 
 def test_mongoclient_est_interdit_dans_les_modules_du_projet():
-    """Le module fautif du 05/09/2026 : TradeLogger ouvrait son propre client."""
-    import datalog.trade_logger as tl
+    """utils.mongo est désormais le seul point de création d'un client."""
+    from utils import mongo
     with pytest.raises(RuntimeError, match="interdite pendant les tests"):
-        tl.MongoClient("mongodb://exemple.invalide:27017")
+        mongo.MongoClient("mongodb://exemple.invalide:27017")
 
 
 def test_trade_logger_degrade_proprement_sans_mongo():
@@ -38,3 +38,23 @@ def test_module_importe_tardivement_est_couvert():
     """
     import scripts.backfill_ohlc as tardif
     assert tardif.MongoClient.__name__ == "MongoClientInterdit"
+
+
+def test_un_seul_point_de_creation_de_client():
+    """Hors scripts/ (process courts), seul utils/mongo.py crée un MongoClient.
+
+    Garde anti-régression du correctif de fuite : réintroduire un
+    `MongoClient(...)` ailleurs recréerait un pool de connexions par objet.
+    """
+    import pathlib
+    racine = pathlib.Path(__file__).resolve().parent.parent
+    fautifs = []
+    for chemin in racine.rglob("*.py"):
+        rel = chemin.relative_to(racine)
+        if rel.parts[0] in {"venv", "tests", "scripts", ".git"}:
+            continue
+        if rel.as_posix() == "utils/mongo.py":
+            continue
+        if "MongoClient(" in chemin.read_text(encoding="utf-8"):
+            fautifs.append(rel.as_posix())
+    assert not fautifs, f"MongoClient créé hors utils/mongo.py : {fautifs}"

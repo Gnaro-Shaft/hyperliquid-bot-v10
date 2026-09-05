@@ -15,12 +15,12 @@ Ici : une position PAR paire, chaque fill simulé avec la bougie de SA paire.
 import time
 from datetime import datetime, timezone
 
-from pymongo import MongoClient
+from utils.mongo import get_db
 
 from config import (
     PAIRS, POSITION_SIZE_PCT, RESERVE_BALANCE_PCT,
     TP_PCT, SL_PCT, PAPER_START_BALANCE,
-    MONGO_URL, MONGO_DB, MONGO_COLLECTION_1M,
+    MONGO_URL, MONGO_COLLECTION_1M,
     MONGO_COLLECTION_PAPER_TRADES, MONGO_COLLECTION_PAPER_STATE,
 )
 from datalog.trade_logger import TradeLogger
@@ -51,7 +51,7 @@ class PaperTrader:
     # ── MongoDB ───────────────────────────────────────────────
     def _connect(self):
         try:
-            self.db = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)[MONGO_DB]
+            self.db = get_db()
         except Exception as e:
             print(f"[PAPER] Mongo indisponible: {e}")
 

@@ -23,10 +23,11 @@ import time
 from collections import defaultdict
 
 import requests
-from pymongo import MongoClient, ASCENDING
+from pymongo import ASCENDING
+from utils.mongo import get_db
 
 from config import (
-    MONGO_URL, MONGO_DB, COLLECT_PAIRS,
+    MONGO_URL, COLLECT_PAIRS,
     MONGO_COLLECTION_WHALE_POSITIONS, MONGO_COLLECTION_LIQ_CLUSTERS,
     MONGO_COLLECTION_WHALE_FLOWS, MONGO_COLLECTION_HEARTBEATS,
     WHALE_POLL_INTERVAL, WHALE_LEADERBOARD_REFRESH_SEC, WHALE_TOP_N,
@@ -84,8 +85,7 @@ class WhaleCollector:
         self.mongo = None
         if MONGO_URL:
             try:
-                client = MongoClient(MONGO_URL)
-                self.mongo = client[MONGO_DB]
+                self.mongo = get_db()
                 self._ensure_indexes()
                 print("[WHALES] MongoDB connecte.")
             except Exception as e:

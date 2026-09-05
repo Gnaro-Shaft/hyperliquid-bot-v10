@@ -18,10 +18,11 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 import websockets
-from pymongo import MongoClient, ASCENDING
+from pymongo import ASCENDING
+from utils.mongo import get_db
 
 from config import (
-    COLLECT_PAIRS, MONGO_URL, MONGO_DB,
+    COLLECT_PAIRS, MONGO_URL,
     MONGO_COLLECTION_1M, MONGO_COLLECTION_15M, MONGO_COLLECTION_1H,
     MONGO_COLLECTION_ORDERBOOK, MONGO_COLLECTION_TRADES_MARKET,
     MONGO_COLLECTION_HEARTBEATS,
@@ -49,8 +50,7 @@ class WebSocketCollector:
         self.candle_store = candle_store
         if MONGO_URL:
             try:
-                client = MongoClient(MONGO_URL)
-                self.mongo = client[MONGO_DB]
+                self.mongo = get_db()
                 self._mongo_connected = True
                 self._ensure_indexes()
             except Exception as e:
