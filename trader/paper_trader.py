@@ -189,6 +189,7 @@ class PaperTrader:
         return True, {"side": "long" if p["side"] == "buy" else "short",
                       "entry_price": p["entry"], "contracts": p["size"],
                       "mark_price": mark,
+                      "open_ts": p.get("open_ts"),
                       "unrealized_pnl": _gross(p["side"], p["entry"], mark, p["size"])}
 
     def close_position(self, reason="manual", context=None):

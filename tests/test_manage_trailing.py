@@ -239,3 +239,65 @@ def test_position_sans_open_time_survit_au_plafond(monkeypatch):
 
     assert ("close", "max_hold") not in trader.appels
     assert positions["BTC"]["active"]
+
+
+# ── Reprise après redémarrage : la date d'ouverture doit survivre ────────────
+
+class FauxTraderAvecPosition:
+    """Trader factice exposant une position ouverte, comme au redémarrage."""
+
+    def __init__(self, open_ts):
+        self.pair = None
+        self._open_ts = open_ts
+
+    def has_open_position(self):
+        if self.pair != "BTC/USDC:USDC":
+            return False, None
+        return True, {"side": "long", "entry_price": 100.0, "contracts": 1.0,
+                      "mark_price": 101.0, "open_ts": self._open_ts,
+                      "unrealized_pnl": 1.0}
+
+
+def test_sync_conserve_la_date_d_ouverture_reelle():
+    """Sans ça, chaque redémarrage remettrait à zéro le compteur de détention
+    et le plafond de 7 jours ne se déclencherait jamais."""
+    ouverture_ms = int((time.time() - 5 * 86400) * 1000)
+    mgr = PositionManager(FauxTraderAvecPosition(ouverture_ms), FauxRisk(), None,
+                          {"BTC": empty_position()}, {"BTC": 600}, {"BTC": 0.0})
+
+    mgr.sync_on_start()
+
+    age_jours = (time.time() - mgr.positions["BTC"]["open_time"]) / 86400
+    assert age_jours == pytest.approx(5, abs=0.01)
+
+
+def test_sync_retombe_sur_maintenant_sans_horodatage():
+    """Un exchange qui ne fournit pas la date : on ne ferme pas sur une date
+    inventée, on repart de maintenant."""
+    mgr = PositionManager(FauxTraderAvecPosition(None), FauxRisk(), None,
+                          {"BTC": empty_position()}, {"BTC": 600}, {"BTC": 0.0})
+
+    mgr.sync_on_start()
+
+    assert mgr.positions["BTC"]["open_time"] == pytest.approx(time.time(), abs=5)
+
+
+def test_une_position_ancienne_reprise_est_fermee_au_prochain_cycle(monkeypatch):
+    """Bout en bout : reprise d'une position de 8 jours, puis clôture."""
+    import trader.position_manager as pm
+    monkeypatch.setattr(pm, "MAX_HOLD_SEC", 7 * 86400)
+
+    reprise = FauxTraderAvecPosition(int((time.time() - 8 * 86400) * 1000))
+    positions = {"BTC": empty_position()}
+    mgr = PositionManager(reprise, FauxRisk(), None, positions,
+                          {"BTC": 600}, {"BTC": 0.0})
+    mgr.sync_on_start()
+    assert positions["BTC"]["active"]
+
+    # le trader factice de clôture prend le relais pour le cycle suivant
+    fermeur = FauxTrader()
+    mgr.trader = fermeur
+    mgr.manage_trailing("BTC", 101.0)
+
+    assert ("close", "max_hold") in fermeur.appels
+    assert not positions["BTC"]["active"]

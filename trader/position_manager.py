@@ -241,13 +241,18 @@ class PositionManager:
             self.trader.pair = pair
             has_pos, pos_info = self.trader.has_open_position()
             if has_pos and pos_info:
+                # Conserver la date d'ouverture réelle : la remplacer par
+                # `now` remettrait à zéro le compteur de MAX_HOLD_SEC à chaque
+                # redémarrage, et le plafond de détention ne se déclencherait
+                # jamais sur un service qui redémarre plus souvent que lui.
+                open_ts = pos_info.get("open_ts")
                 self.positions[coin] = {
                     **empty_position(),
                     "active": True,
                     "entry": pos_info["entry_price"],
                     "side": "buy" if pos_info["side"] == "long" else "sell",
                     "size": abs(pos_info.get("contracts", 0)),
-                    "open_time": time.time(),
+                    "open_time": open_ts / 1000 if open_ts else time.time(),
                 }
                 print(f"[BOT] [{coin}] Position existante: {pos_info['side']} "
                       f"@ {pos_info['entry_price']:.6g} | PnL: {pos_info['unrealized_pnl']:+.2f}")

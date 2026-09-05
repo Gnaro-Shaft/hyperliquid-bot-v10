@@ -348,6 +348,10 @@ class HyperliquidTrader:
                             "entry_price": float(pos.get("entryPrice") or 0),
                             "contracts": contracts,
                             "mark_price": float(pos.get("markPrice") or 0),
+                            # Horodatage d'ouverture quand l'exchange le donne :
+                            # sans lui, un redémarrage remettrait à zéro le
+                            # compteur de MAX_HOLD_SEC.
+                            "open_ts": pos.get("timestamp"),
                             "unrealized_pnl": float(pos.get("unrealizedPnl") or 0),
                         }
             except Exception as e:
