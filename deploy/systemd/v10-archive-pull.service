@@ -16,7 +16,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# L'adresse du VPS vit hors du dépôt : /etc/default/v10-archive-pull
+# contient VPS_HOST=<ip ou nom d'hôte>.
+EnvironmentFile=/etc/default/v10-archive-pull
 ExecStart=/usr/bin/rsync -a --info=stats1 \
     -e "ssh -i /root/.ssh/v10_archive -o BatchMode=yes -o ConnectTimeout=20" \
-    v10archive@54.38.65.228:/ /data/backups/V10-archive/parquet/
+    v10archive@${VPS_HOST}:/ /data/backups/V10-archive/parquet/
 SyslogIdentifier=v10-archive-pull
