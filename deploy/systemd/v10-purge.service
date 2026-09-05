@@ -1,0 +1,31 @@
+# Purge du buffer Mongo — déclenchée par le SUCCÈS de v10-export.service.
+#
+# Pas de timer propre, et c'est délibéré : la purge ne doit tourner qu'après un
+# archivage réussi. Le script refuse de son côté de supprimer un jour dont la
+# partition Parquet est absente ou incomplète ; le chaînage systemd exprime la
+# même exigence un cran plus haut.
+[Unit]
+Description=Purge du buffer Mongo V10 (archive = Parquet)
+After=v10-export.service
+OnFailure=v10-alert@%n.service
+
+[Service]
+Type=oneshot
+User=botv10
+Group=botv10
+WorkingDirectory=/opt/v10
+EnvironmentFile=/opt/v10/.env
+# --keep-days 2 et non le défaut de 4 : mesuré le 05/09/2026, la collecte
+# produit 109 Mo/jour. Garder 4 jours réclamerait ~437 Mo, soit 85 % du
+# tier Atlas M0 (512 Mo). Le moteur, lui, n'a besoin que de ~37 h
+# (150 bougies de 15 min). Deux jours laissent ~218 Mo, avec de la marge.
+ExecStart=/opt/v10/venv/bin/python -m scripts.purge_mongo_buffer --keep-days 2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/v10/data
+SyslogIdentifier=v10-purge
+
+# Le code 1 signale « des jours n'ont PAS été purgés faute d'archive complète ».
+# C'est un vrai avertissement, pas un échec du service : on veut être alerté,
+# donc on le laisse remonter comme échec — l'alerte Telegram partira.

@@ -80,6 +80,7 @@ install -m 644 "$UNITS_DIR"/v10-bot.service     /etc/systemd/system/
 install -m 644 "$UNITS_DIR"/v10-alert@.service  /etc/systemd/system/
 install -m 644 "$UNITS_DIR"/v10-export.service  /etc/systemd/system/
 install -m 644 "$UNITS_DIR"/v10-export.timer    /etc/systemd/system/
+install -m 644 "$UNITS_DIR"/v10-purge.service   /etc/systemd/system/
 systemctl daemon-reload
 # --now sur le timer : `enable` seul ne l'arme qu'au prochain démarrage.
 # Le bot, lui, reste volontairement à l'arrêt (démarrage explicite).

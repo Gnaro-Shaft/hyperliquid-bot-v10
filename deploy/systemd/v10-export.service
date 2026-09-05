@@ -3,6 +3,8 @@
 Description=Export Parquet V10 (archive de référence)
 After=network-online.target
 OnFailure=v10-alert@%n.service
+# La purge ne tourne que si l'archivage a réussi.
+OnSuccess=v10-purge.service
 
 [Service]
 Type=oneshot

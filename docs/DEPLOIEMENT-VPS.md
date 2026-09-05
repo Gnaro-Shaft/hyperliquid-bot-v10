@@ -76,6 +76,38 @@ Mise à jour du code : refaire le `rsync`, puis
 la marge est large, et une fuite provoque un redémarrage tracé et notifié plutôt
 qu'un OOM système silencieux.
 
+## Purge du buffer Mongo — chaînée à l'export
+
+`v10-purge.service` n'a **pas de timer propre** : elle est déclenchée par
+`OnSuccess=` de `v10-export.service`. La purge ne doit tourner qu'après un
+archivage réussi — le script refuse déjà de supprimer un jour dont la partition
+Parquet est absente ou incomplète, le chaînage systemd exprime la même exigence
+un cran plus haut.
+
+**`--keep-days 2`, et non le défaut de 4.** Mesuré le 05/09/2026 : la collecte
+produit **109 Mo/jour** (4,5 Mo/h sur 11 h d'observation). Conserver 4 jours
+réclamerait ~437 Mo, soit 85 % du tier Atlas M0 (512 Mo). Le moteur n'a besoin
+que de ~37 h (150 bougies de 15 min) ; deux jours laissent ~218 Mo de marge.
+
+Sans purge, le plafond M0 est atteint en **4,2 jours**.
+
+Le code de sortie 1 signifie « des jours n'ont pas été purgés faute d'archive
+complète ». C'est volontairement traité comme un échec : l'alerte Telegram part.
+Un avertissement récurrent signale que l'export ne suit pas.
+
+### L'archive est scindée — à consolider
+
+Le VPS purge d'après **son propre** `PARQUET_DIR` (`/opt/v10/data/parquet`), qui
+ne contient que ce qu'il a exporté depuis le 05/09/2026. L'archive historique
+(10/07 → 22/08, 5,35 M lignes) vit sur le Mac, avec copie sur homeserv02.
+
+Conséquence : le VPS ne peut purger que ce qu'il a lui-même archivé. Les
+partitions du 21-22/08 ont dû être copiées à la main pour débloquer 681
+documents restés en base.
+
+**Décision en attente** : consolider l'archive au même endroit — le plus logique
+étant le VPS, qui la produit désormais, avec sauvegarde vers homeserv02.
+
 ## Ce qui ne doit PAS tourner sur le VPS
 
 Le **watchdog externe** (`scripts/external_watchdog.py`) va sur homeserv03. Sur
