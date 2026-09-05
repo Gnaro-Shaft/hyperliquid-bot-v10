@@ -21,6 +21,7 @@ from config import (
     LEVELS, SL_PCT, TP_PCT, MIN_TP_PCT, DEBUG, SIGNAL_THRESHOLD_DEFAULT,
     REGIME_ADAPTIVE, REGIME_HIGH_VOL_ATR_PCT,
 )
+from strategy import scoring_rules
 from strategy.indicators import (
     ema, rsi, macd, bollinger_bands, vwap, atr,
     bb_width, bb_percent_b, volume_ratio, ema_slope, adx
@@ -259,190 +260,9 @@ class StrategyEngine:
                 trend_1h = "bull" if row_1h["EMA9"] > row_1h["EMA21"] else "bear"
         debug["trend_1h"] = trend_1h
 
-        # --- 1. EMA Trend + Slope (poids x2 si sain, x1 si décélère) ---
-        slope = row["EMA9_slope"] if pd.notna(row["EMA9_slope"]) else 0.0
-        ema_bull = row["EMA9"] > row["EMA21"]
-
-        if ema_bull and slope > 0:
-            score += 2
-            debug["ema_trend"] = f"BULLISH+ACC slope={slope:.4f}% (+2)"
-        elif ema_bull:
-            score += 1
-            debug["ema_trend"] = f"BULLISH+DECL slope={slope:.4f}% (+1)"
-        elif not ema_bull and slope < 0:
-            score -= 2
-            debug["ema_trend"] = f"BEARISH+ACC slope={slope:.4f}% (-2)"
-        else:
-            score -= 1
-            debug["ema_trend"] = f"BEARISH+DECL slope={slope:.4f}% (-1)"
-
-        # --- 2. MACD Momentum (poids x2) ---
-        if row["MACD"] > row["MACD_signal"]:
-            score += 2
-            debug["macd"] = "BULLISH (+2)"
-        else:
-            score -= 2
-            debug["macd"] = "BEARISH (-2)"
-
-        # --- 3. MACD Histogramme — croisement zéro frais (±2) ou continuation (±1) ---
-        hist_sign_changed = (row["MACD_hist"] > 0) != (prev["MACD_hist"] > 0)
-        hist_growing = row["MACD_hist"] > prev["MACD_hist"]
-
-        if hist_sign_changed:
-            if row["MACD_hist"] > 0:
-                score += 2
-                debug["macd_hist"] = f"FRESH BULL CROSS {row['MACD_hist']:.4f} (+2)"
-            else:
-                score -= 2
-                debug["macd_hist"] = f"FRESH BEAR CROSS {row['MACD_hist']:.4f} (-2)"
-        elif hist_growing:
-            score += 1
-            debug["macd_hist"] = f"GROWING {row['MACD_hist']:.4f} (+1)"
-        else:
-            score -= 1
-            debug["macd_hist"] = f"SHRINKING {row['MACD_hist']:.4f} (-1)"
-
-        # --- 4. RSI (poids x1) ---
-        rsi_val = row["RSI"]
-        if pd.isna(rsi_val):
-            rsi_val = 50.0
-        if rsi_val > 65:
-            score -= 1
-            debug["rsi"] = f"OVERBOUGHT {rsi_val:.1f} (-1)"
-        elif rsi_val < 35:
-            score += 1
-            debug["rsi"] = f"OVERSOLD {rsi_val:.1f} (+1)"
-        else:
-            debug["rsi"] = f"NEUTRAL {rsi_val:.1f} (0)"
-
-        # --- 5. Bollinger %B (poids x1) ---
-        bb_pctb = row["BB_pctB"] if pd.notna(row["BB_pctB"]) else 0.5
-
-        if bb_pctb > 0.85 and rsi_val > 55:
-            score -= 1
-            debug["bb"] = f"OVEREXTENDED %B={bb_pctb:.2f} (-1)"
-        elif bb_pctb < 0.15 and rsi_val < 45:
-            score += 1
-            debug["bb"] = f"OVERSOLD ZONE %B={bb_pctb:.2f} (+1)"
-        else:
-            debug["bb"] = f"INSIDE %B={bb_pctb:.2f} (0)"
-
-        # --- 6. VWAP (poids x1) ---
-        if pd.notna(row["VWAP"]) and row["VWAP"] > 0:
-            if row["close"] > row["VWAP"]:
-                score += 1
-                debug["vwap"] = f"ABOVE {row['VWAP']:.2f} (+1)"
-            else:
-                score -= 1
-                debug["vwap"] = f"BELOW {row['VWAP']:.2f} (-1)"
-        else:
-            debug["vwap"] = "N/A (0)"
-
-        # --- 7. Volume spike (poids x1) ---
-        vol_r = row["vol_ratio"] if pd.notna(row["vol_ratio"]) else 1.0
-        if vol_r > 1.8:
-            candle_dir = 1 if row["close"] > row["open"] else -1
-            score += candle_dir
-            debug["volume"] = f"SPIKE x{vol_r:.1f} ({'+' if candle_dir > 0 else ''}{candle_dir})"
-        else:
-            debug["volume"] = f"NORMAL x{vol_r:.1f} (0)"
-
-        # --- 8. ADX strength bonus (poids x1) ---
-        if adx_val >= 30:
-            # Tendance forte : bonus dans la direction des DI
-            plus_di = row["PLUS_DI"] if pd.notna(row["PLUS_DI"]) else 0
-            minus_di = row["MINUS_DI"] if pd.notna(row["MINUS_DI"]) else 0
-            if plus_di > minus_di:
-                score += 1
-                debug["adx_bonus"] = f"STRONG TREND +DI>-DI ({plus_di:.1f}>{minus_di:.1f}) (+1)"
-            else:
-                score -= 1
-                debug["adx_bonus"] = f"STRONG TREND -DI>+DI ({minus_di:.1f}>{plus_di:.1f}) (-1)"
-        else:
-            debug["adx_bonus"] = f"MODERATE TREND ADX={adx_val:.1f} (0)"
-
-        # --- 9. Momentum 1m (poids x1) — timing précis d'entrée ---
-        if confirms_bull_1m:
-            score += 1
-            debug["momentum_1m"] = "BULLISH (+1)"
-        elif confirms_bear_1m:
-            score -= 1
-            debug["momentum_1m"] = "BEARISH (-1)"
-        else:
-            debug["momentum_1m"] = "NO DATA (0)"
-
-        # --- 10. Funding rate (poids x1 ou x2, contrarian) ---
-        funding = mkt["funding_rate"]
-        funding_slope = mkt["funding_slope"]  # None si < 2 polls
-        if funding is not None:
-            slope_str = f" slope={funding_slope*100:.5f}%" if funding_slope is not None else ""
-            if funding > 0.0002:
-                if funding_slope is not None and funding_slope > 0:
-                    score -= 2
-                    debug["funding"] = f"LONGS SUREXTENDUS+MONTANT {funding*100:.4f}%{slope_str} (-2)"
-                else:
-                    score -= 1
-                    debug["funding"] = f"LONGS SUREXTENDUS {funding*100:.4f}%{slope_str} (-1)"
-            elif funding < -0.0002:
-                if funding_slope is not None and funding_slope < 0:
-                    score += 2
-                    debug["funding"] = f"SHORTS SUREXTENDUS+MONTANT {funding*100:.4f}%{slope_str} (+2)"
-                else:
-                    score += 1
-                    debug["funding"] = f"SHORTS SUREXTENDUS {funding*100:.4f}%{slope_str} (+1)"
-            else:
-                debug["funding"] = f"NEUTRAL {funding*100:.4f}%{slope_str} (0)"
-        else:
-            debug["funding"] = "NO DATA (0)"
-
-        # --- 11. Open Interest — trend 30 min (poids x1) ---
-        oi_trend = mkt.get("oi_trend_30m")
-        oi_chg = mkt["oi_change_pct"]  # fallback si pas assez de polls
-        oi_val = oi_trend if oi_trend is not None else oi_chg
-        if oi_val is not None:
-            ema_bull = row["EMA9"] > row["EMA21"] if pd.notna(row["EMA9"]) and pd.notna(row["EMA21"]) else None
-            src = "30m" if oi_trend is not None else "1poll"
-            if abs(oi_val) >= 0.002:   # Variation significative > 0.2%
-                if oi_val > 0 and ema_bull is True:
-                    score += 1
-                    debug["oi"] = f"OI GROWING +{oi_val*100:.3f}% ({src}) BULL (+1)"
-                elif oi_val > 0 and ema_bull is False:
-                    score -= 1
-                    debug["oi"] = f"OI GROWING +{oi_val*100:.3f}% ({src}) BEAR (-1)"
-                elif oi_val < 0:
-                    if ema_bull is True:
-                        score -= 1
-                        debug["oi"] = f"OI DECLINING {oi_val*100:.3f}% ({src}) BULL WEAKENING (-1)"
-                    elif ema_bull is False:
-                        score += 1
-                        debug["oi"] = f"OI DECLINING {oi_val*100:.3f}% ({src}) BEAR WEAKENING (+1)"
-                    else:
-                        debug["oi"] = f"OI DECLINING {oi_val*100:.3f}% ({src}) (0)"
-                else:
-                    debug["oi"] = f"OI {oi_val*100:.3f}% ({src}) ambigu (0)"
-            else:
-                debug["oi"] = f"OI STABLE {oi_val*100:.3f}% ({src}) (0)"
-        else:
-            debug["oi"] = "NO DATA (0)"
-
-        # --- 12. Orderbook imbalance — moyenne 5 min (poids x1) ---
-        imbalance_avg = mkt.get("ob_imbalance_avg")
-        imbalance = mkt["ob_imbalance"]
-        imb_val = imbalance_avg if imbalance_avg is not None else imbalance
-        if imb_val is not None:
-            src = "5min_avg" if imbalance_avg is not None else "snapshot"
-            if imb_val > 0.20:
-                score += 1
-                debug["ob_imbalance"] = f"BID WALL {imb_val:.3f} ({src}) (+1)"
-            elif imb_val < -0.20:
-                score -= 1
-                debug["ob_imbalance"] = f"ASK WALL {imb_val:.3f} ({src}) (-1)"
-            else:
-                debug["ob_imbalance"] = f"BALANCED {imb_val:.3f} ({src}) (0)"
-        else:
-            debug["ob_imbalance"] = "NO DATA (0)"
-
-        # --- 13. Âge de la tendance EMA sur 15m (anti-entrée tardive) ---
+        # === Scoring : 13 règles pondérées (voir strategy/scoring_rules.py) ===
+        # L'âge de la tendance EMA se mesure sur la série complète, pas sur la
+        # dernière bougie : il est donc préparé ici, avant d'appeler les règles.
         ema_dir_series = df_15m["EMA9"] > df_15m["EMA21"]
         current_dir = ema_dir_series.iloc[-1]
         ema_age = 0
@@ -452,16 +272,15 @@ class StrategyEngine:
             else:
                 break
 
-        if ema_age > 20:
-            age_penalty = -1 if ema_bull else 1   # pénalise dans la direction dominante
-            score += age_penalty
-            debug["ema_age"] = f"OLD TREND {ema_age}x15m={ema_age*15}min ({age_penalty:+d})"
-        elif ema_age <= 5:
-            age_bonus = 1 if ema_bull else -1
-            score += age_bonus
-            debug["ema_age"] = f"FRESH TREND {ema_age}x15m={ema_age*15}min ({age_bonus:+d})"
-        else:
-            debug["ema_age"] = f"MATURE TREND {ema_age}x15m={ema_age*15}min (0)"
+        ctx = scoring_rules.contexte(
+            row=row, prev=prev, mkt=mkt, adx_val=adx_val,
+            confirms_bull_1m=confirms_bull_1m, confirms_bear_1m=confirms_bear_1m,
+            ema_age=ema_age)
+        points, debug_regles = scoring_rules.scorer(ctx)
+        score += points
+        debug.update(debug_regles)
+        rsi_val = ctx["rsi_val"]    # réutilisé plus bas dans le document signal
+
 
         # === Normalisation [-2, +2] ===
         base_threshold = score_threshold if score_threshold is not None else SIGNAL_THRESHOLD_DEFAULT
