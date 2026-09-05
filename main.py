@@ -22,7 +22,7 @@ from config import (
     TRAILING_TRIGGER_PCT, TRAILING_STEP_PCT,
     KILL_SWITCH_FILE,
     SIGNAL_CONFIRM_COUNT, LOOP_INTERVAL, TRAILING_CHECK_INTERVAL,
-    MAX_DAILY_DRAWDOWN_PCT, BREAKEVEN_TRIGGER_PCT, BREAKEVEN_OFFSET_PCT,
+    MAX_DAILY_DRAWDOWN_PCT,
     MIN_COLLATERAL, RESERVE_BALANCE_PCT,
     PULLBACK_PCT, PULLBACK_EXPIRY_SEC,
     SIGNAL_THRESHOLD_DEFAULT,
@@ -42,7 +42,7 @@ from collector.whale_collector import WhaleCollector
 from datalog.signal_logger import SignalLogger
 from risk.risk_manager import RiskManager
 from risk import guards
-from trader import position_rules as regles
+from trader.position_manager import PositionManager, empty_position
 from datalog import reporting
 from datalog.decision_log import log_decision
 from utils import mongo
@@ -71,7 +71,7 @@ class TradingBot:
         self._last_daily_reset = None
 
         # --- État multi-paires (un dict par coin) ---
-        self.positions = {coin: self._empty_position() for coin in COINS}
+        self.positions = {coin: empty_position() for coin in COINS}
         self.engines = {}                          # initialisés dans start()
         self._signal_streaks = {c: 0 for c in COINS}
         self._signal_dirs    = {c: 0 for c in COINS}
@@ -88,6 +88,13 @@ class TradingBot:
 
         # --- Compteur d'erreurs ---
         self._err_count = 0
+
+        # --- Gestion des positions ouvertes ---
+        # Reçoit le dict `positions` lui-même : les entrées sont modifiées en
+        # place des deux côtés, jamais réaffectées en bloc.
+        self.pos_mgr = PositionManager(
+            self.trader, self.risk, self.notifier,
+            self.positions, self._cooldowns, self._last_trade_times)
 
     # ──────────────────────────────────────────────────────────
     # Démarrage
@@ -184,7 +191,7 @@ class TradingBot:
             has_pos, pos_info = self.trader.has_open_position()
             if has_pos and pos_info:
                 self.positions[coin] = {
-                    **self._empty_position(),
+                    **empty_position(),
                     "active": True,
                     "entry": pos_info["entry_price"],
                     "side": "buy" if pos_info["side"] == "long" else "sell",
@@ -262,9 +269,9 @@ class TradingBot:
                         if not pos["active"]:
                             continue
                         if pos["trailing_active"]:
-                            self._manage_trailing(coin, live)
+                            self.pos_mgr.manage_trailing(coin, live)
                         if self.positions[coin]["active"]:
-                            self._check_tp_sl_hit(coin, live)
+                            self.pos_mgr.check_tp_sl_hit(coin, live)
             else:
                 time.sleep(LOOP_INTERVAL)
 
@@ -310,7 +317,7 @@ class TradingBot:
 
         # Position fermée par l'exchange (TP/SL atteint)
         if not has_pos and self.positions[coin]["active"]:
-            self._handle_exchange_closure(coin, live_price)
+            self.pos_mgr.handle_exchange_closure(coin, live_price)
 
         # 3. Gestion position existante
         if has_pos and self.positions[coin]["active"]:
@@ -318,14 +325,14 @@ class TradingBot:
                 print(f"[BOT][{coin}] Signal opposé confirmé — fermeture")
                 result = self.trader.close_position(
                     reason="signal_reverse",
-                    context=self._position_context(coin, closing_signal_id=sig.get("signal_id")))
+                    context=self.pos_mgr.context(coin, closing_signal_id=sig.get("signal_id")))
                 if result:
                     self.risk.register_trade_result(result["pnl"])
                     guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
                 self._last_trade_times[coin] = time.time()
-                self.positions[coin] = self._empty_position()
+                self.positions[coin] = empty_position()
             else:
-                self._manage_trailing(coin, live_price)
+                self.pos_mgr.manage_trailing(coin, live_price)
 
         # 4. Ouverture si pas de position
         elif not has_pos:
@@ -340,21 +347,6 @@ class TradingBot:
     # ──────────────────────────────────────────────────────────
     # Logique de trading (moteur conservé)
     # ──────────────────────────────────────────────────────────
-
-    def _position_context(self, coin, closing_signal_id=None):
-        """Contexte de journalisation d'une position (lien trade ↔ signal V10)."""
-        pos = self.positions.get(coin, {})
-        ctx = {
-            "coin": coin,
-            "signal_id": pos.get("signal_id"),
-            "signal_score": pos.get("signal_score"),
-            "raw_score": pos.get("raw_score"),
-            "regime": pos.get("regime"),
-            "entry_features": pos.get("entry_features"),
-        }
-        if closing_signal_id:
-            ctx["closing_signal_id"] = closing_signal_id
-        return ctx
 
     def _should_reverse(self, coin, sig):
         """Ferme la position seulement après SIGNAL_CONFIRM_COUNT signaux opposés consécutifs."""
@@ -565,57 +557,6 @@ class TradingBot:
                   f"SL: {result['sl_price']:.6g} | R:R={rr:.1f}:1 | "
                   f"trail: {trail_distance*100:.2f}% / trigger: {trail_trigger*100:.2f}%")
 
-    def _handle_exchange_closure(self, coin, fallback_price):
-        """Traite une fermeture détectée sur l'exchange (TP/SL atteint)."""
-        pos = self.positions[coin]
-        entry = pos.get("entry", 0)
-        side = pos.get("side", "buy")
-        size = pos.get("size", 0)
-        open_time = pos.get("open_time", time.time() - 3600)
-
-        since_ms = int(open_time * 1000)
-        last_fill = self.trader.get_last_closed_trade(since_ms=since_ms)
-        exit_price = last_fill["price"] if (last_fill and last_fill["price"] > 0) else fallback_price
-
-        pnl = regles.pnl_realise(side, entry, exit_price, size)
-
-        print(f"[BOT][{coin}] ⚡ Fermé par l'exchange | {entry:.6g} → {exit_price:.6g} | PnL: {pnl:+.4f}")
-
-        self.trader.cancel_open_orders()
-        self.notifier.trade_closed(self.trader.pair, side, entry, exit_price, pnl, "tp_sl_exchange")
-        self.risk.register_trade_result(pnl)
-        guards.adjust_cooldown(self._cooldowns, coin, pnl)
-        self._last_trade_times[coin] = time.time()
-        self.trader.logger.log_trade({
-            "pair": self.trader.pair,
-            "side": side,
-            "action": "close",
-            "entry_price": entry,
-            "exit_price": exit_price,
-            "size": size,
-            "pnl": pnl,
-            "reason": "tp_sl_exchange",
-        }, context=self._position_context(coin))
-        self.positions[coin] = self._empty_position()
-
-    def _check_tp_sl_hit(self, coin, live_price):
-        """Détecte si le prix live a croisé le TP ou SL — confirme avec l'exchange."""
-        pos = self.positions[coin]
-        side = pos.get("side")
-        current_tp = pos.get("current_tp", 0)
-        sl_price = pos.get("sl_price", 0)
-
-        tp_hit, sl_hit = regles.tp_sl_franchi(side, live_price, current_tp, sl_price)
-
-        if tp_hit or sl_hit:
-            tag = "TP" if tp_hit else "SL"
-            if DEBUG:
-                print(f"[BOT][{coin}] ⚡ Prix live {live_price:.6g} a croisé le {tag}")
-            # Laisser l'exchange confirmer la fermeture (TP/SL exchange)
-            has_pos, _ = self.trader.has_open_position()
-            if not has_pos and self.positions[coin]["active"]:
-                self._handle_exchange_closure(coin, live_price)
-
     def _compute_size_factor(self, sig):
         """Facteur de taille [0.3, 1.0] : signal × volatilité (ATR) × drawdown."""
         risk_status = self.risk.status()
@@ -635,88 +576,6 @@ class TradingBot:
                   f"pnl_day={risk_status.get('pnl_today', 0):+.2f} "
                   f"regime×{sig.get('regime_size_mult', 1.0)} → {factor:.2f}")
         return factor
-
-    def _manage_trailing(self, coin, last_price):
-        """Trailing profit + breakeven stop + trailing stop pour une paire.
-
-        MOTEUR CONSERVÉ (seule sortie performante de v8). Les décisions
-        arithmétiques vivent dans trader/position_rules.py, où elles sont
-        testées sur les deux sens ; il ne reste ici que l'enchaînement et les
-        effets sur l'exchange.
-        """
-        pos = self.positions[coin]
-        entry, side = pos["entry"], pos["side"]
-
-        # Garde-fou : si entry est manquant ou nul, on ne peut rien calculer
-        if not entry or not side or not last_price:
-            return
-
-        trail_dist = pos.get("trail_distance", TRAIL_PCT)
-        trail_trig = pos.get("trail_trigger", TRAILING_TRIGGER_PCT)
-        trail_step = pos.get("trail_step", TRAILING_STEP_PCT)
-        gain = regles.gain_pct(entry, last_price, side)
-
-        # --- Trailing Profit ---
-        if regles.est_nouveau_sommet(side, last_price, pos.get("best_price"), entry):
-            pos["best_price"] = last_price
-            nouveau_tp = regles.tp_ratchet(side, last_price,
-                                           pos.get("initial_tp_dist", 0),
-                                           pos.get("current_tp"))
-            if nouveau_tp is not None:
-                ordre = self.trader.update_tp(
-                    nouveau_tp, old_tp_order_id=pos.get("tp_order_id"))
-                if ordre is not None:
-                    pos["current_tp"] = nouveau_tp
-                    pos["tp_order_id"] = ordre.get("id")
-                    print(f"[BOT][{coin}] 🎯 TP → {nouveau_tp:.6g}")
-                else:
-                    print(f"[BOT][{coin}] ⚠️ TP update ECHEC @ {nouveau_tp:.6g}")
-
-        # --- Breakeven Stop ---
-        if not pos.get("breakeven_done", False) and gain >= BREAKEVEN_TRIGGER_PCT:
-            breakeven_sl = regles.niveau_breakeven(side, entry, BREAKEVEN_OFFSET_PCT)
-            if regles.breakeven_ameliore(side, breakeven_sl, pos.get("sl_price", 0)):
-                print(f"[BOT][{coin}] 🛡️ Breakeven @ {breakeven_sl:.6g} (gain: {gain*100:.2f}%)")
-                ordre = self.trader.update_sl(
-                    breakeven_sl, old_sl_order_id=pos.get("sl_order_id"))
-                if ordre is not None:
-                    # Confirmer seulement si l'exchange a bien placé le nouvel ordre
-                    pos["sl_price"] = breakeven_sl
-                    pos["sl_order_id"] = ordre.get("id")
-                    pos["breakeven_done"] = True
-                else:
-                    print(f"[BOT][{coin}] ⚠️ Breakeven SL ECHEC — sera retenté au prochain cycle")
-
-        # --- Trailing Stop ---
-        if not pos["trailing_active"] and gain >= trail_trig:
-            pos["trailing"] = regles.niveau_trailing(side, last_price, trail_dist)
-            pos["trailing_active"] = True
-            print(f"[BOT][{coin}] 📈 Trailing activé @ {pos['trailing']:.6g} "
-                  f"(gain: {gain*100:.2f}%)")
-
-        if pos["trailing_active"]:
-            candidat = regles.niveau_trailing(side, last_price, trail_dist)
-            # `elif` volontaire : un cycle qui fait monter le stop ne peut pas
-            # aussi le déclencher — comportement d'origine.
-            if regles.trailing_doit_monter(side, candidat, pos["trailing"], entry, trail_step):
-                pos["trailing"] = candidat
-                fleche = "📈" if side == "buy" else "📉"
-                print(f"[BOT][{coin}] {fleche} Trailing → {candidat:.6g}")
-            elif regles.trailing_touche(side, last_price, pos["trailing"]):
-                comparaison = "<=" if side == "buy" else ">="
-                print(f"[BOT][{coin}] 🔔 Trailing touché "
-                      f"({last_price:.6g} {comparaison} {pos['trailing']:.6g})")
-                self._fermer_sur_trailing(coin)
-
-    def _fermer_sur_trailing(self, coin):
-        """Ferme la position sur déclenchement du stop suiveur."""
-        result = self.trader.close_position(
-            reason="trailing_stop", context=self._position_context(coin))
-        if result:
-            self.risk.register_trade_result(result["pnl"])
-            guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
-        self._last_trade_times[coin] = time.time()
-        self.positions[coin] = self._empty_position()
 
     def _check_mongo_health(self) -> bool:
         """Vérifie que MongoDB est joignable au démarrage (3 tentatives)."""
@@ -739,34 +598,6 @@ class TradingBot:
             print("[BOT] 🛑 KILL SWITCH actif")
             return True
         return False
-
-    def _empty_position(self):
-        return {
-            "active": False,
-            "entry": None,
-            "side": None,
-            "size": 0,
-            "trail_distance": TRAIL_PCT,
-            "trail_trigger": TRAILING_TRIGGER_PCT,
-            "trail_step": TRAILING_STEP_PCT,
-            "trailing": None,
-            "trailing_active": False,
-            "open_time": None,
-            "best_price": None,
-            "initial_tp_dist": 0,
-            "current_tp": 0,
-            "sl_price": 0,
-            "sl_order_id": None,        # ID ordre SL sur l'exchange
-            "tp_order_id": None,        # ID ordre TP sur l'exchange
-            "breakeven_done": False,
-            "pending_entry": None,
-            # Lien trade ↔ signal (V10)
-            "signal_id": None,
-            "signal_score": None,
-            "raw_score": None,
-            "regime": None,
-            "entry_features": None,
-        }
 
     def _run_collector(self):
         loop = asyncio.new_event_loop()

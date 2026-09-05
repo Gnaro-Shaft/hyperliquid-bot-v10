@@ -17,6 +17,7 @@ from config import (TRAIL_PCT, TRAILING_TRIGGER_PCT, TRAILING_STEP_PCT,
                     BREAKEVEN_TRIGGER_PCT, BREAKEVEN_OFFSET_PCT)
 from utils.prices import round_price_sig
 import main
+from trader.position_manager import PositionManager, empty_position
 
 
 class FauxTrader:
@@ -106,29 +107,27 @@ def _reference_v8(bot, coin, last_price):
                 pos["trailing"] = new_trailing
             elif last_price <= trailing:
                 bot.trader.close_position(reason="trailing_stop", context={})
-                bot.positions[coin] = bot._empty_position()
+                bot.positions[coin] = empty_position()
         elif side == "sell":
             new_trailing = last_price * (1 + trail_dist)
             if new_trailing < trailing - (entry * trail_step):
                 pos["trailing"] = new_trailing
             elif last_price >= trailing:
                 bot.trader.close_position(reason="trailing_stop", context={})
-                bot.positions[coin] = bot._empty_position()
+                bot.positions[coin] = empty_position()
 
 
 def _bot(trader):
-    """TradingBot minimal, sans __init__ (qui ouvrirait des connexions)."""
-    b = main.TradingBot.__new__(main.TradingBot)
-    b.trader = trader
-    b.risk = FauxRisk()
-    b._cooldowns = {"BTC": 600}
-    b._last_trade_times = {"BTC": 0.0}
-    b.positions = {}
-    return b
+    """PositionManager isolé — plus besoin d'un TradingBot pour tester le trailing.
+
+    C'est le bénéfice direct de l'extraction : avant, cette logique n'était
+    atteignable qu'en instanciant le bot entier, donc en ouvrant des connexions.
+    """
+    return PositionManager(trader, FauxRisk(), None, {}, {"BTC": 600}, {"BTC": 0.0})
 
 
 def _position(entry, side, tp_dist=0.04):
-    p = main.TradingBot._empty_position(None)
+    p = empty_position()
     p.update({"active": True, "entry": entry, "side": side, "size": 1.0,
               "initial_tp_dist": tp_dist, "current_tp": 0, "sl_price": 0,
               "open_time": 0.0})
@@ -165,7 +164,7 @@ def test_equivalence_sur_trajectoires_aleatoires(side, echecs):
 
         for p in prix:
             _reference_v8(ancien, "BTC", p)
-            nouveau._manage_trailing("BTC", p)
+            nouveau.manage_trailing("BTC", p)
 
         assert _etat_comparable(nouveau.positions["BTC"]) == \
                _etat_comparable(ancien.positions["BTC"]), \
@@ -177,5 +176,5 @@ def test_equivalence_sur_trajectoires_aleatoires(side, echecs):
 def test_position_sans_entree_ne_declenche_rien():
     b = _bot(FauxTrader())
     b.positions["BTC"] = _position(0, "buy")
-    b._manage_trailing("BTC", 100.0)
+    b.manage_trailing("BTC", 100.0)
     assert b.trader.appels == []
