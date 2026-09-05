@@ -1,16 +1,60 @@
-# Runtime bot + collectors (cloud)
-ccxt
-websockets
-pymongo[srv]
-python-dotenv
-pandas
-requests
-numpy
-dnspython
+# Versions épinglées sur la résolution du dernier déploiement cloud
+# (~16/07/2026), reconstituée depuis les dates de publication PyPI et
+# corroborée par l'ancien venv local (numpy 2.5.1). Objectif : un
+# `fly deploy` ne doit pas changer les versions au milieu de la collecte.
+#
+# Seule déviation assumée : pandas 3.0.5 au lieu de la 3.0.4 de juillet,
+# cette dernière ayant été retirée de PyPI (segfaults datetime) et corrigée
+# par la 3.0.5 publiée le 22/07/2026.
+#
+# Ne pas relâcher ces pins tant que le dataset 3 mois n'est pas clos.
+# Montée de version = décision délibérée, avec tests. En attente notamment :
+# websockets 17.x (majeure, cœur de la collecte) — voir websocket_collector.py.
 
-# Export / analyse (homeserv01 — facultatif sur le cloud)
-polars
-duckdb
+# ── Runtime bot + collectors (cloud) ──────────────────────────
+ccxt==4.5.66
+websockets==16.1
+pymongo==4.17.0          # extra [srv] supprimé : inexistant en 4.x ; dnspython épinglé ci-dessous
+python-dotenv==1.2.2
+pandas==3.0.5   # PAS 3.0.4 (retirée de PyPI : segfaults datetime)
+requests==2.34.2
+numpy==2.5.1
+dnspython==2.8.0
 
-# Dev
-pytest
+# ── Export / analyse (homeserv01 — facultatif sur le cloud) ───
+polars==1.42.1
+duckdb==1.5.4
+
+# ── Dev ───────────────────────────────────────────────────────
+pytest==9.1.1
+
+# ── Transitifs (épinglés pour un build reproductible) ─────────
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.1
+aiohttp-fast-zlib==0.3.0
+aiosignal==1.4.0
+attrs==26.1.0
+certifi==2026.6.17
+cffi==2.0.0
+charset-normalizer==3.4.7
+coincurve==21.0.0
+cryptography==49.0.0
+frozenlist==1.8.0
+idna==3.18
+iniconfig==2.3.0
+multidict==6.7.1
+orjson==3.11.9
+packaging==26.3
+pluggy==1.6.0
+polars-runtime-32==1.42.1
+propcache==0.5.2
+pycparser==3.0
+Pygments==2.21.0
+python-dateutil==2.9.0.post0
+setuptools==82.0.1
+six==1.17.0
+typing_extensions==4.16.0
+urllib3==2.7.0
+uvloop==0.22.1
+yarl==1.24.2
+zlib-ng==1.0.0
