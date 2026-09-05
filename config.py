@@ -22,6 +22,7 @@ PAPER_START_BALANCE = float(os.getenv("PAPER_START_BALANCE", "1000"))
 V10_COINS = ["BTC", "ETH", "SOL", "HYPE", "DOGE", "WIF", "kPEPE", "SUI", "INJ", "TIA"]
 PAIRS = [f"{c}/USDC:USDC" for c in V10_COINS]
 COLLECT_PAIRS = PAIRS           # tout ce qui est tradé est collecté (et inversement)
+COINS = [p.split("/")[0] for p in PAIRS]   # "BTC/USDC:USDC" -> "BTC"
 
 MIN_COLLATERAL = {pair: 10 for pair in PAIRS}   # notionnel minimum HL ~$10
 

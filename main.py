@@ -18,22 +18,17 @@ from datetime import datetime, timezone
 
 
 from config import (
-    PAIRS, DEBUG, TP_PCT, SL_PCT, TRAIL_PCT, PAPER_MODE,
+    PAIRS, COINS, DEBUG, TP_PCT, SL_PCT, TRAIL_PCT, PAPER_MODE,
     TRAILING_TRIGGER_PCT, TRAILING_STEP_PCT,
     KILL_SWITCH_FILE,
     SIGNAL_CONFIRM_COUNT, LOOP_INTERVAL, TRAILING_CHECK_INTERVAL,
     MAX_DAILY_DRAWDOWN_PCT, BREAKEVEN_TRIGGER_PCT, BREAKEVEN_OFFSET_PCT,
-    MIN_COLLATERAL, RESERVE_BALANCE_PCT, POSITION_SIZE_PCT,
-    MAX_OPEN_POSITIONS, MAX_POSITIONS_PER_DIR, MAX_TOTAL_EXPOSURE_PCT,
-    CB_MAX_ATR_PCT, CB_MAX_ABS_FUNDING, CB_MAX_CANDLE_RANGE_PCT, CB_MAX_SPREAD_PCT,
-    CB_MIN_OB_DEPTH_RATIO,
+    MIN_COLLATERAL, RESERVE_BALANCE_PCT,
     PULLBACK_PCT, PULLBACK_EXPIRY_SEC,
-    AUTOCAL_LOOKBACK_TRADES, SIGNAL_THRESHOLD_DEFAULT,
-    SIGNAL_THRESHOLD_MIN, SIGNAL_THRESHOLD_MAX,
-    MONGO_URL, MONGO_COLLECTION_TRADES, MONGO_COLLECTION_DECISIONS,
+    SIGNAL_THRESHOLD_DEFAULT,
+    MONGO_URL,
     MONGO_COLLECTION_FUNDING, MONGO_COLLECTION_OI, MONGO_COLLECTION_ORDERBOOK,
-    COOLDOWN_BASE_SEC, COOLDOWN_MIN_SEC, COOLDOWN_MAX_SEC,
-    COOLDOWN_LOSS_MULT, COOLDOWN_WIN_MULT,
+    COOLDOWN_BASE_SEC,
     WHALE_ENABLED,
 )
 from strategy.strategy_engine import StrategyEngine
@@ -46,17 +41,15 @@ from collector.rest_collector import RestCollector
 from collector.whale_collector import WhaleCollector
 from datalog.signal_logger import SignalLogger
 from risk.risk_manager import RiskManager
+from risk import guards
+from datalog import reporting
+from datalog.decision_log import log_decision
 from utils import mongo
 from utils.notifier import Notifier
 from utils.sizing import size_factor
-from utils.reporting import daily_report_window
-from utils.exposure import exposure_check
-from utils.market_guard import market_circuit_breaker
-from utils.observability import build_decision_doc
 from utils.prices import round_price_sig
 from monitor.health import HealthMonitor
 
-COINS = [p.split("/")[0] for p in PAIRS]
 
 
 class TradingBot:
@@ -211,13 +204,15 @@ class TradingBot:
                 today = datetime.now(timezone.utc).date()
                 if today != self._last_daily_reset:
                     if self._last_daily_reset is not None:
-                        self._send_daily_report()
+                        reporting.send_daily_report(
+                            self.notifier, self.trader, self.positions)
                     balance = self.trader._get_total_balance()
                     self.risk.reset_daily(balance)
                     self._last_daily_reset = today
                     if self._last_autocal_date is None or \
                        (today - self._last_autocal_date).days >= 7:
-                        self._auto_calibrate()
+                        self._signal_threshold = reporting.auto_calibrate(
+                            self._signal_threshold, self.notifier)
                         self._last_autocal_date = today
                     self.notifier.send(f"📅 <b>Nouveau jour</b> — Solde: <code>{balance:.2f} USDC</code>")
 
@@ -325,7 +320,7 @@ class TradingBot:
                     context=self._position_context(coin, closing_signal_id=sig.get("signal_id")))
                 if result:
                     self.risk.register_trade_result(result["pnl"])
-                    self._adjust_cooldown(coin, result["pnl"])
+                    guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
                 self._last_trade_times[coin] = time.time()
                 self.positions[coin] = self._empty_position()
             else:
@@ -433,23 +428,24 @@ class TradingBot:
         if not can_trade:
             print(f"[BOT][{coin}] Trading bloqué: {reason}")
             self.notifier.risk_alert(reason)
-            self._log_decision(coin, sig, side, "refused", f"risk: {reason}", price)
+            log_decision(coin, sig, side, "refused", f"risk: {reason}", price)
             return
 
         # ── Circuit breaker marché ──
-        tripped, cb_reasons = self._check_market_breaker(sig)
+        tripped, cb_reasons = guards.market_breaker(sig)
         if tripped:
             joined = ", ".join(cb_reasons)
             print(f"[BOT][{coin}] 🚧 Circuit breaker marché — entrée bloquée : {joined}")
             self.notifier.risk_alert(f"Circuit breaker [{coin}] : {joined}")
-            self._log_decision(coin, sig, side, "refused", f"circuit_breaker: {joined}", price)
+            log_decision(coin, sig, side, "refused", f"circuit_breaker: {joined}", price)
             return
 
         # ── Filtre corrélation ──
-        blocked, corr_boost = self._check_correlation(coin, side)
+        blocked, corr_boost = guards.correlation_filter(
+            coin, side, self.positions, self._last_signal_scores)
         if blocked:
             print(f"[BOT][{coin}] ⚡ Bloqué — conflit corrélation avec paire sœur")
-            self._log_decision(coin, sig, side, "refused", "correlation", price)
+            log_decision(coin, sig, side, "refused", "correlation", price)
             return
         if corr_boost > 0 and DEBUG:
             print(f"  [CORR][{coin}] Signal corroboré par paire sœur → size_boost +{corr_boost*100:.0f}%")
@@ -457,11 +453,12 @@ class TradingBot:
         size_factor = min(1.0, self._compute_size_factor(sig) + corr_boost)
 
         # ── Garde-fou exposition globale ──
-        allowed, exp_reason = self._check_exposure(coin, side, size_factor, balance)
+        allowed, exp_reason = guards.exposure_guard(
+            coin, side, size_factor, balance, self.positions)
         if not allowed:
             print(f"[BOT][{coin}] 🛡️ Exposition — entrée bloquée : {exp_reason}")
             self.notifier.risk_alert(f"Exposition [{coin}] : {exp_reason}")
-            self._log_decision(coin, sig, side, "refused", f"exposure: {exp_reason}", price)
+            log_decision(coin, sig, side, "refused", f"exposure: {exp_reason}", price)
             return
 
         # ── Pullback entry — arrondi coin-agnostique (V10) ──
@@ -480,7 +477,7 @@ class TradingBot:
         }
         print(f"[BOT][{coin}] ⏳ En attente pullback @ {target:.6g} "
               f"(actuel={price:.6g}, expiry={PULLBACK_EXPIRY_SEC}s)")
-        self._log_decision(coin, sig, side, "accepted", "ok", price, size_factor)
+        log_decision(coin, sig, side, "accepted", "ok", price, size_factor)
 
     def _check_pending_entry(self, coin, live_price):
         """Déclenche l'entrée quand le pullback est atteint ou expiré."""
@@ -567,97 +564,6 @@ class TradingBot:
                   f"SL: {result['sl_price']:.6g} | R:R={rr:.1f}:1 | "
                   f"trail: {trail_distance*100:.2f}% / trigger: {trail_trigger*100:.2f}%")
 
-    def _check_correlation(self, coin, direction):
-        """Filtre corrélation (gestion risque drawdown) — conservé de v8.5.
-
-        - BLOQUÉ si une paire sœur a une position MÊME DIRECTION active ;
-        - size_boost=0.15 si une paire sœur a un signal confirmé même sens
-          sans position active.
-        """
-        for other_coin in COINS:
-            if other_coin == coin:
-                continue
-            other_pos  = self.positions[other_coin]
-            other_score = self._last_signal_scores.get(other_coin, 0)
-
-            if other_pos["active"] and other_pos.get("side"):
-                other_side = other_pos["side"]
-                same_dir = (direction == "buy"  and other_side == "buy") or \
-                           (direction == "sell" and other_side == "sell")
-                if same_dir:
-                    print(f"  [CORR][{coin}] Bloqué — {other_coin} déjà {other_side} "
-                          f"(même direction, risque drawdown concentré)")
-                    return True, 0.0  # BLOQUÉ
-
-            if not other_pos["active"]:
-                if (direction == "buy"  and other_score == 2) or \
-                   (direction == "sell" and other_score == -2):
-                    return False, 0.15  # Boost +15% — signal confirmé par paire sœur
-
-        return False, 0.0
-
-    def _decisions_col(self):
-        """Collection Mongo du journal de décision."""
-        return mongo.get_db()[MONGO_COLLECTION_DECISIONS]
-
-    def _log_decision(self, coin, sig, side, action, reason, price, size_factor=None):
-        """Journalise une décision d'entrée (acceptée/refusée) en Mongo."""
-        try:
-            doc = build_decision_doc(
-                coin, sig, side, action, reason, price, size_factor,
-                int(time.time() * 1000),
-                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            )
-            self._decisions_col().insert_one(doc)
-        except Exception as e:
-            print(f"[BOT][{coin}] Erreur log decision: {e}")
-
-    def _check_market_breaker(self, sig):
-        """Circuit breaker marché : bloque l'entrée si conditions extrêmes."""
-        dbg = sig.get("debug", {})
-        metrics = {
-            "atr_pct":          dbg.get("atr_pct"),
-            "funding_rate":     dbg.get("funding_rate"),
-            "candle_range_pct": dbg.get("candle_range_pct"),
-            "spread_pct":       dbg.get("spread_pct"),
-            "ob_depth_ratio":   dbg.get("ob_depth_ratio"),
-        }
-        thresholds = {
-            "max_atr_pct":          CB_MAX_ATR_PCT,
-            "max_abs_funding":      CB_MAX_ABS_FUNDING,
-            "max_candle_range_pct": CB_MAX_CANDLE_RANGE_PCT,
-            "max_spread_pct":       CB_MAX_SPREAD_PCT,
-            "min_ob_depth_ratio":   CB_MIN_OB_DEPTH_RATIO,
-        }
-        return market_circuit_breaker(metrics, thresholds)
-
-    def _notional(self, balance, sf):
-        """Notionnel estimé d'une position : usable × POSITION_SIZE_PCT × clamp(factor)."""
-        usable = balance * (1 - RESERVE_BALANCE_PCT)
-        return usable * POSITION_SIZE_PCT * max(0.3, min(1.0, sf))
-
-    def _check_exposure(self, coin, side, cand_size_factor, balance):
-        """Garde-fou exposition globale — conservé de v8.9."""
-        open_positions = []
-        for c in COINS:
-            if c == coin:
-                continue
-            pos = self.positions[c]
-            if pos.get("active") and pos.get("side"):
-                notional = float(pos.get("size", 0)) * float(pos.get("entry", 0) or 0)
-                open_positions.append({"side": pos["side"], "notional": notional})
-            else:
-                pending = pos.get("pending_entry")
-                if pending and pending.get("direction"):
-                    notional = self._notional(balance, pending.get("size_factor", 1.0))
-                    open_positions.append({"side": pending["direction"], "notional": notional})
-
-        candidate_notional = self._notional(balance, cand_size_factor)
-        return exposure_check(
-            open_positions, side, candidate_notional, balance,
-            MAX_OPEN_POSITIONS, MAX_POSITIONS_PER_DIR, MAX_TOTAL_EXPOSURE_PCT,
-        )
-
     def _handle_exchange_closure(self, coin, fallback_price):
         """Traite une fermeture détectée sur l'exchange (TP/SL atteint)."""
         pos = self.positions[coin]
@@ -677,7 +583,7 @@ class TradingBot:
         self.trader.cancel_open_orders()
         self.notifier.trade_closed(self.trader.pair, side, entry, exit_price, pnl, "tp_sl_exchange")
         self.risk.register_trade_result(pnl)
-        self._adjust_cooldown(coin, pnl)
+        guards.adjust_cooldown(self._cooldowns, coin, pnl)
         self._last_trade_times[coin] = time.time()
         self.trader.logger.log_trade({
             "pair": self.trader.pair,
@@ -831,7 +737,7 @@ class TradingBot:
                         reason="trailing_stop", context=self._position_context(coin))
                     if result:
                         self.risk.register_trade_result(result["pnl"])
-                        self._adjust_cooldown(coin, result["pnl"])
+                        guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
                     self._last_trade_times[coin] = time.time()
                     self.positions[coin] = self._empty_position()
             elif side == "sell":
@@ -845,102 +751,13 @@ class TradingBot:
                         reason="trailing_stop", context=self._position_context(coin))
                     if result:
                         self.risk.register_trade_result(result["pnl"])
-                        self._adjust_cooldown(coin, result["pnl"])
+                        guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
                     self._last_trade_times[coin] = time.time()
                     self.positions[coin] = self._empty_position()
 
     # ──────────────────────────────────────────────────────────
     # Rapport journalier & Auto-calibration
     # ──────────────────────────────────────────────────────────
-
-    def _send_daily_report(self):
-        """Envoie un résumé journalier Telegram (trades, PnL, win rate)."""
-        try:
-            db = mongo.get_db()
-            day_start_ms, today_start_ms, day_label = daily_report_window(
-                datetime.now(timezone.utc)
-            )
-            trades = list(db[MONGO_COLLECTION_TRADES].find(
-                {"action": "close",
-                 "timestamp": {"$gte": day_start_ms, "$lt": today_start_ms}}
-            ))
-            balance = self.trader._get_total_balance()
-            if not trades:
-                self.notifier.send(
-                    f"📊 <b>Bilan de la veille ({day_label})</b>\n"
-                    f"Aucun trade fermé\n"
-                    f"Solde: <code>{balance:.2f} USDC</code>"
-                )
-                return
-            wins   = [t for t in trades if t.get("pnl", 0) > 0]
-            losses = [t for t in trades if t.get("pnl", 0) <= 0]
-            total_pnl = sum(t.get("pnl", 0) for t in trades)
-            win_rate  = len(wins) / len(trades) * 100
-
-            open_parts = []
-            for c in COINS:
-                p = self.positions[c]
-                if p["active"]:
-                    open_parts.append(f"{c} {p['side'].upper()} @ {p['entry']:.6g}")
-            open_str = " | ".join(open_parts) if open_parts else "Aucune"
-
-            emoji = "📈" if total_pnl >= 0 else "📉"
-            msg = (
-                f"{emoji} <b>Bilan de la veille ({day_label})</b>\n"
-                f"Trades: {len(trades)} | ✅ {len(wins)} gagnants / ❌ {len(losses)} perdants\n"
-                f"Win rate: <b>{win_rate:.1f}%</b>\n"
-                f"PnL total: <b>{total_pnl:+.4f} USDC</b>\n"
-                f"Solde: <code>{balance:.2f} USDC</code>\n"
-                f"Positions ouvertes: {open_str}"
-            )
-            self.notifier.send(msg)
-        except Exception as e:
-            print(f"[BOT] Daily report error: {e}")
-
-    def _auto_calibrate(self):
-        """Ajuste le seuil de signal selon les performances récentes."""
-        try:
-            db = mongo.get_db()
-            trades = list(db[MONGO_COLLECTION_TRADES].find(
-                {"action": "close"}
-            ).sort("timestamp", -1).limit(AUTOCAL_LOOKBACK_TRADES))
-
-            if len(trades) < 5:
-                print("[BOT] Auto-cal: pas assez de trades pour calibrer")
-                return
-
-            wins = sum(1 for t in trades if t.get("pnl", 0) > 0)
-            win_rate = wins / len(trades)
-            old_threshold = self._signal_threshold
-
-            if win_rate < 0.40:
-                self._signal_threshold = min(SIGNAL_THRESHOLD_MAX, self._signal_threshold + 1)
-            elif win_rate > 0.60:
-                self._signal_threshold = max(SIGNAL_THRESHOLD_MIN, self._signal_threshold - 1)
-
-            if self._signal_threshold != old_threshold:
-                self.notifier.send(
-                    f"🔧 <b>Auto-calibration</b>\n"
-                    f"Win rate ({len(trades)} trades): <b>{win_rate*100:.1f}%</b>\n"
-                    f"Seuil: {old_threshold} → <b>{self._signal_threshold}</b>"
-                )
-            print(f"[BOT] Auto-cal: seuil={self._signal_threshold} | "
-                  f"win_rate={win_rate*100:.1f}% ({wins}/{len(trades)})")
-        except Exception as e:
-            print(f"[BOT] Auto-cal error: {e}")
-
-    def _adjust_cooldown(self, coin, pnl):
-        """Allonge le cooldown après une perte, le réduit après un gain."""
-        old = self._cooldowns[coin]
-        if pnl < 0:
-            new = min(COOLDOWN_MAX_SEC, old * COOLDOWN_LOSS_MULT)
-            direction = "⬆"
-        else:
-            new = max(COOLDOWN_MIN_SEC, old * COOLDOWN_WIN_MULT)
-            direction = "⬇"
-        self._cooldowns[coin] = round(new)
-        print(f"  [COOLDOWN][{coin}] {direction} {old:.0f}s → {new:.0f}s "
-              f"({'perte' if pnl < 0 else 'gain'} {pnl:+.4f})")
 
     def _check_mongo_health(self) -> bool:
         """Vérifie que MongoDB est joignable au démarrage (3 tentatives)."""
