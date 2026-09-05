@@ -90,3 +90,46 @@ def test_un_probleme_durable_n_etouffe_pas_une_panne_nouvelle():
 
 def test_premiere_detection_alerte():
     assert _nouveaux(["quelque chose"], []) == ["quelque chose"]
+
+
+# ── Fraîcheur de la sauvegarde ───────────────────────────────────────────────
+
+from scripts.external_watchdog import sauvegarde_perimee, check_sauvegarde
+
+HEURE = 3600
+
+
+def test_sauvegarde_recente_ne_declenche_rien():
+    assert sauvegarde_perimee(MAINTENANT/1000 - 6*HEURE, MAINTENANT, 48) is None
+
+
+def test_sauvegarde_trop_ancienne_alerte():
+    p = sauvegarde_perimee(MAINTENANT/1000 - 72*HEURE, MAINTENANT, 48)
+    assert p is not None and "72 h" in p
+
+
+def test_frontiere_du_seuil_de_sauvegarde():
+    """Deux passages nocturnes manqués : au-delà, quelque chose ne va pas."""
+    assert sauvegarde_perimee(MAINTENANT/1000 - 48*HEURE, MAINTENANT, 48) is None
+    assert sauvegarde_perimee(MAINTENANT/1000 - 49*HEURE, MAINTENANT, 48) is not None
+
+
+def test_marqueur_absent_est_ignore():
+    """Pas de marqueur : on ne sait pas, donc on n'alarme pas à tort."""
+    assert sauvegarde_perimee(None, MAINTENANT, 48) is None
+
+
+def test_controle_desactive_sans_configuration(monkeypatch):
+    import scripts.external_watchdog as w
+    monkeypatch.setattr(w, "BACKUP_CHECK_HOST", "")
+    assert check_sauvegarde(MAINTENANT) == []
+
+
+def test_panne_de_liaison_ne_reveille_personne(monkeypatch):
+    """Une liaison SSH coupée n'est pas une panne de collecte."""
+    import scripts.external_watchdog as w
+    monkeypatch.setattr(w, "BACKUP_CHECK_HOST", "hote")
+    monkeypatch.setattr(w, "BACKUP_CHECK_KEY", "/cle")
+    monkeypatch.setattr(w.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("injoignable")))
+    assert check_sauvegarde(MAINTENANT) == []

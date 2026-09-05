@@ -182,6 +182,13 @@ HYPERLIQUID_API_SECRET = os.getenv("HYPERLIQUID_API_SECRET", "")
 HL_WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS", HYPERLIQUID_API_KEY)
 AGENT_EXPIRY_ALERT_DAYS = 30   # alerte quand un agent expire dans moins de N jours
 
+# Surveillance de la sauvegarde de l'archive (watchdog externe). L'hôte et la
+# clé restent hors du dépôt : renseignés dans le .env de la machine de
+# surveillance. Vide = contrôle désactivé.
+BACKUP_CHECK_HOST = os.getenv("BACKUP_CHECK_HOST", "")
+BACKUP_CHECK_KEY = os.getenv("BACKUP_CHECK_KEY", "")
+BACKUP_MAX_AGE_HOURS = int(os.getenv("BACKUP_MAX_AGE_HOURS", "48"))
+
 # === DEBUG ===
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 

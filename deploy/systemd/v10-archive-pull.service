@@ -22,4 +22,7 @@ EnvironmentFile=/etc/default/v10-archive-pull
 ExecStart=/usr/bin/rsync -a --info=stats1 \
     -e "ssh -i /root/.ssh/v10_archive -o BatchMode=yes -o ConnectTimeout=20" \
     v10archive@${VPS_HOST}:/ /data/backups/V10-archive/parquet/
+# Marqueur horodaté : c'est lui que le watchdog externe interroge pour
+# détecter une sauvegarde qui aurait cessé sans bruit.
+ExecStartPost=/bin/sh -c 'date +%%s > /data/backups/V10-archive/.derniere_sauvegarde'
 SyslogIdentifier=v10-archive-pull

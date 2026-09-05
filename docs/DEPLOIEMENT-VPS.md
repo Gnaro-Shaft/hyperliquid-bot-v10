@@ -149,12 +149,31 @@ se propage pas.
 | Écriture vers le VPS | `sending to read-only server is not allowed` |
 | Tirage de l'archive | 4 657 fichiers, 547 Mo ✅ |
 
-### Angle mort connu
+### Surveillance de la sauvegarde
 
-**Rien n'alerte si la sauvegarde cesse.** Le watchdog surveille la collecte et
-l'expiration des clés, pas la fraîcheur de cette copie. Piste : que le service
-écrive un marqueur horodaté dans Mongo, et que le watchdog s'alarme au-delà de
-48 h.
+Une sauvegarde qui cesse est silencieuse : la collecte continue, les heartbeats
+battent, et l'unique copie hors du VPS vieillit sans que personne ne le sache.
+Détecter ce cas exige un observateur **externe** — si homeserv02 s'éteint, elle
+ne peut pas signaler sa propre panne.
+
+C'est donc le watchdog de homeserv03 qui contrôle, toutes les 5 minutes :
+
+1. `v10-archive-pull.service` écrit un marqueur horodaté après chaque
+   sauvegarde réussie (`ExecStartPost`) ;
+2. homeserv03 le lit par SSH avec une clé verrouillée sur un unique
+   `cat` (`command="cat …/.derniere_sauvegarde",restrict`) ;
+3. au-delà de **48 h** — deux passages nocturnes manqués — l'alerte part.
+
+`BACKUP_CHECK_HOST` et `BACKUP_CHECK_KEY` vivent dans le `.env` de homeserv03,
+jamais dans le dépôt. Vide = contrôle désactivé.
+
+Une liaison SSH coupée est journalisée et ignorée : le watchdog surveille la
+collecte, pas le réseau local.
+
+**Éprouvé le 05/09/2026** : marqueur vieilli artificiellement de 72 h → détecté
+(« sauvegarde de l'archive vieille de 72 h (seuil 48 h) ») ; marqueur restauré →
+plus d'alerte. Et la clé, sollicitée avec `cat /etc/shadow`, renvoie le marqueur :
+la commande forcée écrase tout.
 
 ## Historique — pourquoi ces choix
 

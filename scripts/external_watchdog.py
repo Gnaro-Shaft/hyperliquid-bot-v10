@@ -15,6 +15,7 @@ Cron suggéré (toutes les 5 min) :
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -23,6 +24,7 @@ from pymongo import MongoClient
 from config import (
     MONGO_URL, MONGO_DB, MONGO_COLLECTION_HEARTBEATS, MONGO_COLLECTION_BOT_STATUS,
     COLLECTOR_SILENT_ALERT_SEC, HL_WALLET_ADDRESS, AGENT_EXPIRY_ALERT_DAYS,
+    BACKUP_CHECK_HOST, BACKUP_CHECK_KEY, BACKUP_MAX_AGE_HOURS,
 )
 from utils import http
 from collector.heartbeat import read_heartbeats, stale_heartbeats
@@ -96,6 +98,50 @@ def check_agents(now_ms, session=None):
         return []
 
 
+def sauvegarde_perimee(marqueur_epoch, now_ms, seuil_h=BACKUP_MAX_AGE_HOURS):
+    """La sauvegarde de l'archive est-elle trop ancienne ?
+
+    Elle tourne une fois par nuit ; au-delà de deux passages manqués, quelque
+    chose ne va pas. Une sauvegarde qui cesse est parfaitement silencieuse :
+    la collecte continue, les heartbeats battent, et l'unique copie hors du VPS
+    vieillit sans que personne ne le sache.
+    """
+    if marqueur_epoch is None:
+        return None
+    age_h = (now_ms / 1000 - marqueur_epoch) / 3600
+    if age_h > seuil_h:
+        return f"sauvegarde de l'archive vieille de {age_h:.0f} h (seuil {seuil_h} h)"
+    return None
+
+
+def check_sauvegarde(now_ms):
+    """Lit le marqueur horodaté sur la machine de sauvegarde.
+
+    La clé SSH utilisée est verrouillée côté hôte distant sur un unique `cat` :
+    elle ne peut rien faire d'autre. Une panne de liaison est journalisée et
+    ignorée — le watchdog surveille la collecte, pas le réseau local.
+    """
+    if not BACKUP_CHECK_HOST or not BACKUP_CHECK_KEY:
+        return []
+    try:
+        sortie = subprocess.run(
+            ["ssh", "-i", BACKUP_CHECK_KEY, "-o", "BatchMode=yes",
+             "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "ConnectTimeout=10", BACKUP_CHECK_HOST, "true"],
+            capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+        if sortie.returncode != 0 or not sortie.stdout.strip():
+            # Remonter stderr : sans lui, un refus de clé d'hôte se présente
+            # comme un banal « invalid literal for int() » et coûte du temps.
+            detail = (sortie.stderr or "").strip().splitlines()
+            raise RuntimeError(detail[-1] if detail else f"code {sortie.returncode}, sortie vide")
+        marqueur = int(sortie.stdout.strip())
+    except Exception as e:
+        print(f"[WATCHDOG] contrôle de la sauvegarde indisponible ({e}) — ignoré")
+        return []
+    probleme = sauvegarde_perimee(marqueur, now_ms)
+    return [probleme] if probleme else []
+
+
 def _load_state():
     try:
         with open(STATE_FILE) as f:
@@ -134,7 +180,9 @@ def main():
         problems = [f"MongoDB injoignable: {e}"]
         db = None
 
-    problems += check_agents(int(time.time() * 1000))
+    maintenant_ms = int(time.time() * 1000)
+    problems += check_agents(maintenant_ms)
+    problems += check_sauvegarde(maintenant_ms)
 
     if problems:
         print(f"[WATCHDOG] ⚠️ {problems}")
