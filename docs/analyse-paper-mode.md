@@ -3,8 +3,17 @@
 Première évaluation de l'edge, sur les données collectées du **10/07 au 22/08/2026**.
 Question posée : le signal d'entrée bat-il le hasard ?
 
-**Réponse courte : non. Il fait 4,2 points de moins**, et l'écart n'est pas
-attribuable à la chance. Le passage en réel n'est pas justifié en l'état.
+**Réponse courte : non.** Le passage en réel n'est pas justifié en l'état.
+
+> ⚠️ **Corrigé le 05/09/2026.** Ce document affirmait plus bas que l'écart de
+> −4,2 points « n'est pas attribuable à la chance » (p = 0,998). C'était
+> surconfiant : le calcul supposait les setups indépendants, alors qu'un même
+> mouvement de marché en déclenche plusieurs le même jour. Avec un bootstrap
+> par journées, l'IC95 de l'écart est [−10,0 ; +2,0] et **enjambe zéro**.
+>
+> Ce qui reste établi, et plus solidement : la stratégie est **non rentable**,
+> marge −10,2 points, IC95 [−16,0 ; −4,1], P(perdant) = 1,00. Voir
+> `falsification-2026-09-05.md` §5.
 
 ---
 
@@ -88,8 +97,14 @@ l'archive.
 | Écart | **−4,2 points** |
 | p-valeur (obtenir ce résultat ou mieux par hasard) | 0,998 |
 
-Une p-valeur de 0,998 signifie que l'écart **dans l'autre sens** serait
-significatif à p ≈ 0,002. Le signal ne se contente pas d'être neutre.
+~~Une p-valeur de 0,998 signifie que l'écart dans l'autre sens serait
+significatif à p ≈ 0,002. Le signal ne se contente pas d'être neutre.~~
+
+**Corrigé le 05/09/2026** : cette p-valeur suppose l'indépendance des setups,
+hypothèse fausse (plusieurs coins se déclenchent sur le même mouvement). Après
+bootstrap par journées, l'écart de −4,2 points a un IC95 de [−10,0 ; +2,0] :
+le signal **n'est pas démontré pire que le hasard**. Il reste démontré non
+rentable. Voir `falsification-2026-09-05.md` §0.2 et §5.
 
 ---
 
@@ -130,6 +145,11 @@ marché calme, il est neutre — voire légèrement positif à la vente.
 ---
 
 ## 6. Ce que ça implique
+
+> **Les deux pistes ci-dessous ont été testées le 05/09/2026 et sont toutes
+> deux falsifiées** — de même que l'inversion du signal et le carry de funding.
+> Voir `falsification-2026-09-05.md`. Le texte d'origine est conservé tel quel
+> pour garder trace du raisonnement.
 
 Le levier n'est ni le stop ni le TP : c'est le **timing d'entrée**. Deux pistes
 mesurables sur ces mêmes 1 074 setups, sans risquer un centime :
