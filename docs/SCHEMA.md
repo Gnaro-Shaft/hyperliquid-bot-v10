@@ -127,3 +127,44 @@ FROM read_parquet('data/parquet/ohlc_15m/**/*.parquet') c
 ASOF JOIN read_parquet('data/parquet/funding_rates/**/*.parquet') f
   ON c.coin = f.coin AND c.timestamp >= f.timestamp;
 ```
+
+## Anomalies connues du dataset
+
+À lire avant tout backtest ou toute analyse : ces trous sont réels et documentés,
+ce ne sont pas des bugs de lecture.
+
+### Interruption du 20/08 au 05/09/2026 — 16 jours
+
+La machine Fly.io a été tuée par l'OOM killer le **22/08/2026 à 08:10 UTC**
+(`exit_code=137`), et n'a été relancée que le **05/09/2026 à 05:16 UTC**, sur un VPS
+OVH. Aucune donnée n'a été collectée dans l'intervalle.
+
+Deux fenêtres distinctes, car l'export Parquet s'était arrêté avant le bot :
+
+| Période | Collectes de marché | Six collections purgeables* |
+|---|---|---|
+| jusqu'au 20/08 02:05 | présent | présent |
+| 20/08 02:05 → 22/08 08:09 | **récupéré** depuis Mongo le 05/09 | **perdu** |
+| 22/08 08:09 → 05/09 05:16 | néant (bot arrêté) | néant |
+
+\* `signal_evaluations`, `orderbook_snapshots`, `market_trades`, `whale_positions`,
+`liquidation_clusters`, `ohlc_1m` — purgées de Mongo après archivage, donc absentes
+des deux côtés pour cette fenêtre. Soit ~111 000 évaluations au maximum, si le moteur
+tournait encore : `bot_status` s'arrête au 20/08 02:04, ce qui laisse penser que non.
+
+### `paper_trades` — ligne d'ouverture manquante le 05/09/2026
+
+La position BTC ouverte le **05/09/2026 à 05:29:38 UTC** (`entry 79554.0`,
+`size 0.001545`, TP 81670, SL 78707) n'a **pas** de ligne `action=open` dans
+`paper_trades` : elle a été supprimée par erreur lors du nettoyage de faux trades
+insérés par une exécution de `pytest` le même jour (voir la mise en garde ci-dessous).
+Sa ligne `action=close` existera normalement.
+
+Choix délibéré de ne pas la reconstituer : dans un dataset destiné au backtest, une
+ligne fabriquée serait indiscernable d'une ligne réelle. Un trou identifié vaut mieux.
+
+### Mise en garde — `pytest` écrit dans la base de production
+
+`tests/test_paper_trader.py` neutralise `PaperTrader._connect`, mais `TradeLogger`
+ouvre alors son propre client vers `MONGO_URL` et insère de vrais documents dans
+`paper_trades`. Lancer la suite avec `env MONGO_URL= …` tant que ce n'est pas corrigé.
