@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# pre-commit — applique les règles du CLAUDE.md global (sections 1 et 3).
+#
+# Refuse un commit qui contient :
+#   1. un fichier d'environnement (.env et variantes, hors modèles .example) ;
+#   2. une signature de secret dans les lignes ajoutées ;
+#   3. un fichier de code au-dessus de 400 lignes ET qui grossit par rapport à HEAD.
+#
+# Le contrôle de taille n'est pas rétroactif : un fichier déjà hors limite reste
+# commitable tant qu'il ne grandit pas.
+#
+# Activation (une fois par clone) :  git config core.hooksPath .githooks
+
+set -uo pipefail
+
+MAX=400
+erreurs=()
+
+# Base de comparaison : HEAD, ou l'arbre vide si le dépôt n'a aucun commit.
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  base=HEAD
+else
+  base=$(git hash-object -t tree /dev/null)
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -n "$staged" ] || exit 0
+
+# --- 1. Fichiers d'environnement ---------------------------------------------
+envs=$(printf '%s\n' "$staged" \
+  | grep -E '(^|/)\.env' \
+  | grep -vE '\.(example|sample|template|dist)$' || true)
+if [ -n "$envs" ]; then
+  erreurs+=("Fichier(s) d'environnement dans l'index : $(printf '%s' "$envs" | tr '\n' ' ')")
+fi
+
+# --- 2. Signatures de secret --------------------------------------------------
+motif='(sk-[A-Za-z0-9_-]{20,}|sk_[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Ss][Ee][Cc][Rr][Ee][Tt][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,})'
+
+nb_secrets=$(git diff --cached -U0 --diff-filter=ACM \
+  | grep -E '^\+' | grep -v '^+++' \
+  | grep -Ec "$motif" || true)
+if [ "${nb_secrets:-0}" -gt 0 ]; then
+  erreurs+=("${nb_secrets} ligne(s) ajoutee(s) contenant une signature de secret")
+fi
+
+# --- 3. Plafond de 400 lignes, uniquement si le fichier grossit ---------------
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    *.js|*.jsx|*.ts|*.tsx|*.mjs|*.cjs|*.vue|*.svelte|*.py|*.rb|*.go|*.rs|*.php|*.java|*.css|*.scss|*.html) ;;
+    *) continue ;;
+  esac
+  case "$f" in
+    */node_modules/*|*/dist/*|*/build/*|*/generated/*|*/migrations/*|*/locales/*|*/fixtures/*|*.min.*|*.gen.*) continue ;;
+  esac
+
+  apres=$(git show ":$f" 2>/dev/null | awk 'END { print NR }')
+  [ -n "$apres" ] || continue
+  [ "$apres" -gt "$MAX" ] || continue
+
+  avant=$(git show "$base:$f" 2>/dev/null | awk 'END { print NR }')
+  avant=${avant:-0}
+
+  if [ "$apres" -gt "$avant" ]; then
+    erreurs+=("$f : $apres lignes (plafond $MAX) et en hausse — etait a $avant")
+  fi
+done <<< "$staged"
+
+# --- Verdict ------------------------------------------------------------------
+[ ${#erreurs[@]} -eq 0 ] && exit 0
+
+echo "" >&2
+echo "Commit refuse — regles du CLAUDE.md global :" >&2
+for e in "${erreurs[@]}"; do
+  echo "  - $e" >&2
+done
+echo "" >&2
+exit 1
