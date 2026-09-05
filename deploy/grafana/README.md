@@ -21,8 +21,6 @@ ssh root@docker-stack
 mkdir -p /opt/v10-grafana && cd /opt/v10-grafana
 # copier docker-compose.yml et dashboard-v10.json depuis deploy/grafana/
 cat > .env <<'EOF'
-MONGO_URL=...
-MONGO_DB=bot_hyperliquid_v10
 GRAFANA_ADMIN_PASSWORD=...
 GRAFANA_BIND_IP=<ip-tailnet-docker-stack>
 EOF
@@ -39,7 +37,12 @@ Plugin communautaire `haohanyang-mongodb-datasource` (le plugin MongoDB du
 catalogue Grafana est Enterprise/payant). Installé par `GF_INSTALL_PLUGINS`,
 non signé, donc explicitement autorisé dans le compose.
 
-Champs attendus par le plugin, à renseigner depuis `MONGO_URL` :
+Le plugin ne lit **rien** de l'environnement : hôte, base et identifiants
+vivent dans la datasource, stockée dans le volume `v10-grafana-data`. C'est
+pourquoi le compose ne transporte aucune URL Mongo — l'y laisser n'aurait
+fait qu'exposer une clé à `docker inspect`.
+
+Champs à renseigner depuis `MONGO_URL_LECTEUR` (utilisateur en lecture seule) :
 
 | champ | valeur |
 |---|---|
@@ -71,8 +74,15 @@ est en cause, pas le dashboard.
 
 Au 05/09/2026 : 8/8 panneaux renvoient des données.
 
-## Point de durcissement en attente
+## Durcissement — fait le 05/09/2026
 
-`MONGO_URL` donne un accès **complet** à la base ; Grafana n'a besoin que de
-lire. Créer un utilisateur Atlas en lecture seule dédié limiterait ce qu'un
-accès à docker-stack permettrait de faire.
+Grafana lisait avec le compte `bot`, qui a un accès **complet** à la base.
+Il utilise désormais l'utilisateur Atlas **`lecteur`** (`MONGO_URL_LECTEUR`),
+en lecture seule. Vérifié à la bascule : les 17 collections sont lisibles, et
+`insert`, `update`, `delete`, `createIndex` et `drop` sont tous refusés
+(code Atlas 8000). Le watchdog de homeserv03 utilise le même identifiant.
+
+Seul le VPS conserve l'accès en écriture : lui seul écrit.
+
+Sauvegardes conservées sur docker-stack en cas de retour arrière :
+`/opt/v10-grafana/datasource-avant-lecteur.json` et `.env.avant-lecteur`.
