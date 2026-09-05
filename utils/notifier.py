@@ -1,31 +1,46 @@
 import requests
+
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, DEBUG
+from utils import http
+
+# Timeout réduit à 5 s (au lieu de 10) parce que send() est appelé depuis la
+# boucle de trading : avec 3 tentatives, le pire cas passe de 10 s à ~16,5 s.
+# Sans réessai, une alerte perdue l'était définitivement — c'est le filet de
+# sécurité, il doit survivre à un 429 de Telegram ou à une coupure passagère.
+TIMEOUT_SEC = 5
+TENTATIVES = 3
 
 
 class Notifier:
     def __init__(self):
         self.enabled = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+        self._http = http.creer_session()
         if not self.enabled and DEBUG:
             print("[NOTIFIER] Telegram non configure (TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID manquant)")
 
     def send(self, message):
-        """Envoie un message Telegram en HTML."""
+        """Envoie un message Telegram en HTML. Retourne True si accepté."""
         if not self.enabled:
             if DEBUG:
                 print(f"[NOTIFIER][LOCAL] {message}")
             return
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code != 200 and DEBUG:
-                print(f"[NOTIFIER][ERREUR] Telegram {resp.status_code}: {resp.text}")
-            return resp.status_code == 200
+            http.demander(self._http, "POST", url, json=payload,
+                          timeout=TIMEOUT_SEC, tentatives=TENTATIVES)
+            return True
+        except requests.exceptions.HTTPError as e:
+            # Conserve le détail utile : Telegram explique le refus dans le corps
+            reponse = getattr(e, "response", None)
+            if DEBUG and reponse is not None:
+                print(f"[NOTIFIER][ERREUR] Telegram {reponse.status_code}: {reponse.text}")
+            return False
         except Exception as e:
             if DEBUG:
                 print(f"[NOTIFIER][ERREUR] {e}")

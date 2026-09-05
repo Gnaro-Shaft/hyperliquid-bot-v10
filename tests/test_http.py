@@ -12,8 +12,9 @@ from utils import http
 
 
 class FausseReponse:
-    def __init__(self, statut=200):
+    def __init__(self, statut=200, corps=""):
         self.status_code = statut
+        self.text = corps          # le notifier le lit pour journaliser un refus
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -115,17 +116,22 @@ def test_succes_immediat_ne_dort_pas(sommeils):
     assert session.appels == 1 and durees == []
 
 
-def test_les_collectors_passent_tous_par_le_helper():
-    """Garde anti-régression : aucun collector ne doit appeler requests en direct.
+def test_aucun_appel_http_direct_dans_le_projet():
+    """Garde anti-régression : seul utils/http.py appelle requests directement.
 
-    Un appel direct n'a pas de réessai — et pour rest_collector, un échec coûte
-    le cycle entier, soit 300 s de funding et d'open interest manquants sur les
-    dix coins, alors que ces données alimentent le moteur de décision.
+    Un appel direct n'a pas de réessai. Pour rest_collector un échec coûtait le
+    cycle entier — 300 s de funding et d'open interest manquants sur les dix
+    coins — et pour le notifier, une alerte perdue l'était définitivement.
     """
     import pathlib
-    racine = pathlib.Path(__file__).resolve().parent.parent / "collector"
-    fautifs = [
-        f.name for f in racine.glob("*.py")
-        if "requests." in f.read_text(encoding="utf-8")
-    ]
+    import re
+    racine = pathlib.Path(__file__).resolve().parent.parent
+    motif = re.compile(r"requests\.(get|post|put|delete|request)\(")
+    fautifs = []
+    for chemin in racine.rglob("*.py"):
+        rel = chemin.relative_to(racine)
+        if rel.parts[0] in {"venv", "tests", ".git"} or rel.as_posix() == "utils/http.py":
+            continue
+        if motif.search(chemin.read_text(encoding="utf-8")):
+            fautifs.append(rel.as_posix())
     assert not fautifs, f"appel direct à requests dans : {fautifs}"

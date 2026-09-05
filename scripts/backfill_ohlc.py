@@ -17,7 +17,7 @@ import argparse
 import time
 from datetime import datetime, timezone
 
-import requests
+from utils import http
 from pymongo import MongoClient, UpdateOne
 
 from config import (
@@ -35,14 +35,18 @@ PLANS = [
 ]
 
 
+# Session unique : un backfill enchaîne des dizaines d'appels ; la réutiliser
+# évite autant de poignées de main TLS.
+_SESSION = http.creer_session()
+
+
 def fetch_candles(coin, interval, start_ms, end_ms):
     """candleSnapshot → liste de bougies au schéma du WS collector."""
-    resp = requests.post(API_URL, json={
+    resp = http.demander(_SESSION, "POST", API_URL, json={
         "type": "candleSnapshot",
         "req": {"coin": coin, "interval": interval,
                 "startTime": start_ms, "endTime": end_ms},
     }, timeout=15)
-    resp.raise_for_status()
     out = []
     for c in resp.json():
         minute = datetime.fromtimestamp(c["t"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
