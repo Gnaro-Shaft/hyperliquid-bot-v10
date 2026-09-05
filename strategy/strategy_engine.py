@@ -18,15 +18,14 @@ from datetime import datetime, timezone
 
 from config import (
     MONGO_URL, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M, MONGO_COLLECTION_1H,
-    LEVELS, SL_PCT, TP_PCT, MIN_TP_PCT, DEBUG, SIGNAL_THRESHOLD_DEFAULT,
+    LEVELS, DEBUG, SIGNAL_THRESHOLD_DEFAULT,
 )
-from strategy import gates, scoring_rules
+from strategy import gates, scoring_rules, signal_output
 from strategy.indicators import (
     ema, rsi, macd, bollinger_bands, vwap, atr,
     bb_width, bb_percent_b, volume_ratio, ema_slope, adx
 )
 from datalog.signal_logger import SignalLogger
-from utils.sizing import dynamic_sl_tp
 
 try:
     from ml.predictor import MLPredictor
@@ -35,14 +34,6 @@ except ImportError:
     _ML_AVAILABLE = False
 
 # Seuils ML (tunable)
-
-
-def _f(val):
-    """float(val) ou None si NaN/absent — colonnes propres pour Parquet."""
-    try:
-        return float(val) if pd.notna(val) else None
-    except (TypeError, ValueError):
-        return None
 
 
 class StrategyEngine:
@@ -121,40 +112,7 @@ class StrategyEngine:
 
     @staticmethod
     def _features_from_row(row):
-        """Vecteur de features à plat depuis la dernière bougie 15m enrichie.
-
-        Utilisé par TOUS les chemins de sortie (signal, gate bloqué) pour que
-        chaque ligne du dataset porte le même schéma de colonnes.
-        """
-        close = _f(row.get("close"))
-        atr_v = _f(row.get("ATR"))
-        high, low = _f(row.get("high")), _f(row.get("low"))
-        return {
-            "close_15m": close,
-            "open_15m": _f(row.get("open")),
-            "high_15m": high,
-            "low_15m": low,
-            "volume_15m": _f(row.get("volume")),
-            "candle_range_pct": ((high - low) / close) if (high and low and close) else None,
-            "ema9": _f(row.get("EMA9")),
-            "ema21": _f(row.get("EMA21")),
-            "ema9_slope": _f(row.get("EMA9_slope")),
-            "rsi_14": _f(row.get("RSI")),
-            "macd": _f(row.get("MACD")),
-            "macd_signal": _f(row.get("MACD_signal")),
-            "macd_hist": _f(row.get("MACD_hist")),
-            "bb_upper": _f(row.get("BB_upper")),
-            "bb_lower": _f(row.get("BB_lower")),
-            "bb_pctb": _f(row.get("BB_pctB")),
-            "bb_width": _f(row.get("BB_width")),
-            "vwap": _f(row.get("VWAP")),
-            "atr": atr_v,
-            "atr_pct": (atr_v / close) if (atr_v and close) else None,
-            "vol_ratio": _f(row.get("vol_ratio")),
-            "adx_14": _f(row.get("ADX")),
-            "plus_di": _f(row.get("PLUS_DI")),
-            "minus_di": _f(row.get("MINUS_DI")),
-        }
+        return signal_output.features_depuis_bougie(row)
 
     def compute_signals(self, score_threshold=None):
         """Scoring pondere multi-timeframe v8.2 — 15m comme timeframe principal.
@@ -289,22 +247,12 @@ class StrategyEngine:
         else:
             debug["gate_ml"] = "N/A (modèle non entraîné)" if self.ml_predictor is None else "N/A (signal ≠ ±2)"
 
-        # === TP/SL dynamiques bases sur ATR ===
+        # === TP/SL dynamiques basés sur ATR ===
         atr_val = row["ATR"] if pd.notna(row["ATR"]) else None
-        dynamic_sl, dynamic_tp = dynamic_sl_tp(atr_val, row["close"], SL_PCT, TP_PCT, MIN_TP_PCT)
-        dynamic_sl *= regime_sl_mult
-        dynamic_tp *= regime_tp_mult
-
-        if atr_val and row["close"] > 0:
-            atr_pct = atr_val / row["close"]
-            raw_sl = atr_pct * 1.5
-            debug["atr"] = f"{atr_val:.4f} ({atr_pct*100:.4f}%)"
-            debug["dynamic_sl"] = f"{dynamic_sl*100:.3f}% (raw ATR*1.5={raw_sl*100:.4f}%)"
-            debug["dynamic_tp"] = f"{dynamic_tp*100:.3f}% (R:R={dynamic_tp/dynamic_sl:.1f}:1)"
-        else:
-            debug["atr"] = "N/A"
-            debug["dynamic_tp"] = f"{dynamic_tp*100:.3f}% (static fallback)"
-            debug["dynamic_sl"] = f"{dynamic_sl*100:.3f}% (static fallback)"
+        atr_pct = (atr_val / row["close"]) if (atr_val and row["close"] > 0) else None
+        dynamic_sl, dynamic_tp, debug_tpsl = signal_output.tp_sl_dynamiques(
+            atr_val, row["close"], regime_sl_mult, regime_tp_mult)
+        debug.update(debug_tpsl)
 
         # === Info supplementaire pour debug ===
         ema9_slp = row["EMA9_slope"] if pd.notna(row["EMA9_slope"]) else 0.0
@@ -388,87 +336,14 @@ class StrategyEngine:
 
         return result
 
-    def _gate_blocked(self, debug, row, regime=None, mkt=None, gate_reason="gate",
-                      trend_1h=None):
-        """Retourne un signal neutre quand un filtre gate bloque.
-
-        V10 : la ligne journalisée porte le MÊME schéma que les signaux passés
-        (features complètes + sentiment carry-forward + régime).
-        """
-        mkt = mkt or {}
-        rsi_val = row["RSI"] if pd.notna(row["RSI"]) else 50.0
-        atr_val = row["ATR"] if pd.notna(row["ATR"]) else None
-
-        features = self._features_from_row(row)
-        features["close"] = _f(row.get("close"))
-
-        eval_doc = self.signal_logger.log_evaluation(
-            self.coin,
-            candle_ts=row.get("timestamp"),
-            gate_passed=False,
-            gate_reason=gate_reason,
-            score=0,
-            raw_score=0,
-            label=LEVELS[0]["label"],
-            threshold_used=None,
-            regime=regime,
-            features=features,
-            ctx=mkt,
-            result_extra={"trend_1h": trend_1h},
-            debug={**debug, "close": float(row["close"]), "RSI": float(rsi_val),
-                   "ATR": float(atr_val) if atr_val else None},
-        )
-        return {
-            "score": 0,
-            "raw_score": 0,
-            "label": LEVELS[0]["label"],
-            "color": LEVELS[0]["color"],
-            "dynamic_tp": None,
-            "dynamic_sl": None,
-            "regime": regime,
-            "is_squeeze": debug.get("bb_width_filter", "").endswith("BLOCKED"),
-            "signal_id": eval_doc["signal_id"] if eval_doc else None,
-            "eval_ts": eval_doc["timestamp"] if eval_doc else None,
-            "debug": {
-                **debug,
-                "close": float(row["close"]),
-                "RSI": float(rsi_val),
-                "ATR": float(atr_val) if atr_val else None,
-            }
-        }
+    def _gate_blocked(self, debug, row, **kw):
+        """Sortie anticipée quand un gate bloque — déléguée à signal_output."""
+        return signal_output.sortie_gate_bloque(
+            self.coin, self.signal_logger, debug, row, **kw)
 
     def _neutral(self, reason="", mkt=None):
-        """Signal neutre faute de données. V10 : journalisé aussi (aucun trou)."""
-        if DEBUG:
-            print(f"[STRATEGY] Signal neutre : {reason}")
-        eval_doc = self.signal_logger.log_evaluation(
-            self.coin,
-            candle_ts=None,
-            gate_passed=False,
-            gate_reason=f"insufficient_data: {reason}",
-            score=0,
-            raw_score=0,
-            label=LEVELS[0]["label"],
-            threshold_used=None,
-            regime=None,
-            features=None,
-            ctx=mkt or {},
-            debug={"reason": reason},
-        )
-        return {
-            "score": 0,
-            "raw_score": 0,
-            "label": LEVELS[0]["label"],
-            "color": LEVELS[0]["color"],
-            "dynamic_tp": None,
-            "dynamic_sl": None,
-            "regime": None,
-            "is_squeeze": False,
-            "signal_id": eval_doc["signal_id"] if eval_doc else None,
-            "eval_ts": eval_doc["timestamp"] if eval_doc else None,
-            "debug": {"reason": reason}
-        }
-
+        """Signal neutre faute de données — délégué à signal_output."""
+        return signal_output.sortie_neutre(self.coin, self.signal_logger, reason, mkt)
 
 if __name__ == "__main__":
     engine = StrategyEngine(coin="BTC")
