@@ -54,23 +54,6 @@ class HyperliquidTrader:
         except Exception:
             return round_price_sig(price)
 
-    def select_pair(self):
-        """Choisit la premiere paire pour laquelle on a assez de collateral."""
-        balance = self._get_total_balance()
-        usable = balance * (1 - RESERVE_BALANCE_PCT)
-
-        for pair in PAIRS:
-            min_col = MIN_COLLATERAL.get(pair, 10)
-            if usable >= min_col:
-                if self.pair != pair and DEBUG:
-                    print(f"[TRADER] Paire selectionnee : {pair} (solde utilisable: {usable:.2f})")
-                self.pair = pair
-                return pair
-
-        print(f"[TRADER] Solde insuffisant ({usable:.2f}) pour toutes les paires")
-        self.pair = None
-        return None
-
     def _get_total_balance(self, currency="USDC"):
         try:
             balance = self.exchange.fetch_balance()
@@ -394,8 +377,11 @@ class HyperliquidTrader:
 
 
 if __name__ == "__main__":
+    # Test manuel de connectivité — se connecte réellement à l'exchange.
+    # La paire est fixée ici : en V10 c'est main.py qui la choisit à chaque
+    # cycle (les 10 coins sont tradés), il n'y a plus de sélection automatique.
     trader = HyperliquidTrader()
-    pair = trader.select_pair()
-    print(f"Paire: {pair}")
+    trader.pair = PAIRS[0]
+    print(f"Paire: {trader.pair}")
     print(f"Solde: {trader.get_usable_balance()}")
     print(f"Positions: {trader.fetch_positions()}")
