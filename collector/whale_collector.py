@@ -22,7 +22,7 @@ Rythme : positions toutes les WHALE_POLL_INTERVAL s (défaut 180s, ~30 adresses
 import time
 from collections import defaultdict
 
-import requests
+from utils import http
 from pymongo import ASCENDING
 from utils.mongo import get_db
 
@@ -82,6 +82,7 @@ def build_liq_clusters(positions, mark_prices, bucket_pct=LIQ_CLUSTER_BUCKET_PCT
 
 class WhaleCollector:
     def __init__(self):
+        self.http = http.creer_session()
         self.mongo = None
         if MONGO_URL:
             try:
@@ -114,8 +115,7 @@ class WhaleCollector:
     def _refresh_leaderboard(self):
         """Rafraîchit la liste des adresses suivies (top WHALE_TOP_N + forcées)."""
         try:
-            resp = requests.get(LEADERBOARD_URL, timeout=15)
-            resp.raise_for_status()
+            resp = http.demander(self.http, "GET", LEADERBOARD_URL, timeout=15)
             rows = resp.json().get("leaderboardRows", [])
             # Trier par valeur de compte décroissante (champ accountValue si présent)
             def acct_val(r):
@@ -141,9 +141,9 @@ class WhaleCollector:
 
     def _fetch_positions(self, address):
         """clearinghouseState d'une adresse → liste de positions parsées."""
-        resp = requests.post(API_URL, json={"type": "clearinghouseState",
-                                            "user": address}, timeout=10)
-        resp.raise_for_status()
+        resp = http.demander(self.http, "POST", API_URL,
+                             json={"type": "clearinghouseState", "user": address},
+                             timeout=10)
         state = resp.json()
         out = []
         for ap in state.get("assetPositions", []):
@@ -169,8 +169,8 @@ class WhaleCollector:
     def _mark_prices(self):
         """Mark prices courants par coin (pour le clustering)."""
         try:
-            resp = requests.post(API_URL, json={"type": "metaAndAssetCtxs"}, timeout=10)
-            resp.raise_for_status()
+            resp = http.demander(self.http, "POST", API_URL,
+                                 json={"type": "metaAndAssetCtxs"}, timeout=10)
             data = resp.json()
             universe = data[0].get("universe", [])
             marks = {}
@@ -250,10 +250,9 @@ class WhaleCollector:
         n_ok = 0
         for addr in self._addresses:
             try:
-                resp = requests.post(API_URL, json={
+                resp = http.demander(self.http, "POST", API_URL, json={
                     "type": "userNonFundingLedgerUpdates",
                     "user": addr, "startTime": since_ms}, timeout=10)
-                resp.raise_for_status()
                 for upd in resp.json():
                     delta = upd.get("delta", {})
                     dtype = delta.get("type", "")

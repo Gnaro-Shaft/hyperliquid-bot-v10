@@ -139,3 +139,52 @@ Test de la chaîne, sans attendre une vraie panne :
 runuser -u v10watch -- /opt/v10-watchdog/venv/bin/python -m scripts.external_watchdog --max-age 0
 runuser -u v10watch -- /opt/v10-watchdog/venv/bin/python -m scripts.external_watchdog
 ```
+
+## Résolveurs DNS — à refaire après toute réinstallation
+
+Cloud-init ne configure **qu'un seul** résolveur sur `ens3` (`213.186.33.99`,
+OVH), sans repli : s'il ne répond pas, plus rien ne résout. Le 05/09/2026, une
+bouffée d'échecs a fait perdre 14 relevés de flux baleines.
+
+Ajouter un drop-in netplan, qui prend le pas sur celui de cloud-init et survit à
+ses régénérations :
+
+```yaml
+# /etc/netplan/99-dns.yaml  (chmod 600)
+network:
+  version: 2
+  ethernets:
+    ens3:
+      nameservers:
+        addresses: [213.186.33.99, 9.9.9.9, 149.112.112.112]
+```
+
+```bash
+sudo chmod 600 /etc/netplan/99-dns.yaml
+sudo netplan generate          # valide la syntaxe SANS appliquer
+sudo netplan apply             # reconfigure l'interface
+resolvectl status | grep "DNS Servers"
+```
+
+**`netplan apply` peut couper SSH.** Sur une machine distante, armer un
+coupe-circuit avant d'appliquer :
+
+```bash
+sudo nohup sh -c 'sleep 90; [ -f /tmp/netplan-confirme ] || { rm -f /etc/netplan/99-dns.yaml; netplan apply; }' &
+# puis, une fois la connexion vérifiée :
+sudo touch /tmp/netplan-confirme
+```
+
+Vérifier que les serveurs de secours sont réellement joignables — les déclarer
+ne suffit pas si le filtrage sortant les bloque :
+
+```bash
+python3 -c "import socket; [socket.create_connection((ip,53),4).close() for ip in ('9.9.9.9','149.112.112.112')]"
+```
+
+Quad9 (fondation suisse, à but non lucratif) plutôt que Cloudflare ou Google :
+les requêtes DNS révèlent les hôtes que la machine contacte — Hyperliquid, le
+cluster Atlas, l'API Telegram.
+
+Ceci ne remplace pas le réessai applicatif (`utils/http.py`) : la redondance DNS
+ne couvre qu'une cause d'échec parmi d'autres.
