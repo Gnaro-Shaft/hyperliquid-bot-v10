@@ -8,8 +8,8 @@ Poll l'API REST Hyperliquid toutes les DL_REST_INTERVAL secondes.
   - heartbeat par coin (collection `collector_health`).
 """
 import time
-import requests
 from pymongo import ASCENDING
+from utils import http
 from utils.mongo import get_db
 
 from config import (
@@ -25,6 +25,7 @@ API_URL = "https://api.hyperliquid.xyz/info"
 
 class RestCollector:
     def __init__(self, context_store=None):
+        self.http = http.creer_session()
         self.mongo = None
         self.context_store = context_store
         if MONGO_URL:
@@ -64,8 +65,8 @@ class RestCollector:
 
     def _fetch_and_store(self):
         """Appelle metaAndAssetCtxs et extrait funding + OI."""
-        resp = requests.post(API_URL, json={"type": "metaAndAssetCtxs"}, timeout=10)
-        resp.raise_for_status()
+        resp = http.demander(self.http, "POST", API_URL,
+                             json={"type": "metaAndAssetCtxs"}, timeout=10)
         data = resp.json()
 
         # data = [meta, [assetCtx1, assetCtx2, ...]]

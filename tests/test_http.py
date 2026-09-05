@@ -113,3 +113,19 @@ def test_succes_immediat_ne_dort_pas(sommeils):
     session = FausseSession([FausseReponse(200)])
     http.demander(session, "GET", "u", dormir=dormir)
     assert session.appels == 1 and durees == []
+
+
+def test_les_collectors_passent_tous_par_le_helper():
+    """Garde anti-régression : aucun collector ne doit appeler requests en direct.
+
+    Un appel direct n'a pas de réessai — et pour rest_collector, un échec coûte
+    le cycle entier, soit 300 s de funding et d'open interest manquants sur les
+    dix coins, alors que ces données alimentent le moteur de décision.
+    """
+    import pathlib
+    racine = pathlib.Path(__file__).resolve().parent.parent / "collector"
+    fautifs = [
+        f.name for f in racine.glob("*.py")
+        if "requests." in f.read_text(encoding="utf-8")
+    ]
+    assert not fautifs, f"appel direct à requests dans : {fautifs}"
