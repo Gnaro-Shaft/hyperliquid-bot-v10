@@ -19,16 +19,14 @@ from datetime import datetime, timezone
 from config import (
     MONGO_URL, MONGO_COLLECTION_1M, MONGO_COLLECTION_15M, MONGO_COLLECTION_1H,
     LEVELS, SL_PCT, TP_PCT, MIN_TP_PCT, DEBUG, SIGNAL_THRESHOLD_DEFAULT,
-    REGIME_ADAPTIVE, REGIME_HIGH_VOL_ATR_PCT,
 )
-from strategy import scoring_rules
+from strategy import gates, scoring_rules
 from strategy.indicators import (
     ema, rsi, macd, bollinger_bands, vwap, atr,
     bb_width, bb_percent_b, volume_ratio, ema_slope, adx
 )
 from datalog.signal_logger import SignalLogger
 from utils.sizing import dynamic_sl_tp
-from utils.regime import regime_preset
 
 try:
     from ml.predictor import MLPredictor
@@ -37,8 +35,6 @@ except ImportError:
     _ML_AVAILABLE = False
 
 # Seuils ML (tunable)
-ML_BLOCK_THRESHOLD  = 0.38  # En dessous → gate bloqué (signal très peu probable)
-ML_PENALTY_THRESHOLD = 0.48  # En dessous → pénalité -1 (signal douteux)
 
 
 def _f(val):
@@ -198,44 +194,22 @@ class StrategyEngine:
         score = 0
         debug = {}
 
-        # === FILTRES GATE (anti-chop) ===
+        # === FILTRES GATE (anti-chop) et régime de marché ===
         adx_val = row["ADX"] if pd.notna(row["ADX"]) else 0.0
         bb_w = row["BB_width"] if pd.notna(row["BB_width"]) else 0.0
-        is_squeeze = bb_w < 0.004
-        is_trending = adx_val >= 25
-
-        # Régime de marché — déterminé avant les gates (presets adaptatifs)
         atr_pct_now = (row["ATR"] / row["close"]) if pd.notna(row.get("ATR")) and row["close"] > 0 else None
 
-        if REGIME_ADAPTIVE:
-            preset = regime_preset(adx_val, bb_w, atr_pct_now,
-                                   high_vol_atr=REGIME_HIGH_VOL_ATR_PCT)
-            regime = preset["regime"]
-            regime_threshold_adj = preset["threshold_adj"]
-            regime_tp_mult = preset["tp_mult"]
-            regime_sl_mult = preset["sl_mult"]
-            regime_size_mult = preset["size_mult"]
-            blocked = preset["blocked"]
-        else:
-            # Comportement legacy v8.4 (presets neutres)
-            if adx_val >= 30:
-                regime, regime_threshold_adj = "STRONG", 0
-            elif adx_val >= 25:
-                regime, regime_threshold_adj = "WEAK", 1
-            else:
-                regime, regime_threshold_adj = "RANGE", 0
-            regime_tp_mult = regime_sl_mult = regime_size_mult = 1.0
-            blocked = (adx_val < 25) or is_squeeze
+        rg = gates.evaluer_regime(adx_val, bb_w, atr_pct_now)
+        regime = rg["regime"]
+        regime_threshold_adj = rg["threshold_adj"]
+        regime_tp_mult, regime_sl_mult = rg["tp_mult"], rg["sl_mult"]
+        regime_size_mult = rg["size_mult"]
+        is_squeeze = rg["is_squeeze"]
+        debug.update(rg["debug"])
 
-        debug["adx"] = f"{adx_val:.1f} ({regime})"
-        debug["bb_width_filter"] = f"{bb_w:.4f} ({'OK' if not is_squeeze else 'SQUEEZE — BLOCKED'})"
-
-        if blocked:
-            debug["gate"] = f"BLOCKED — {regime} (ADX={adx_val:.1f}, BBw={bb_w:.4f})"
+        if rg["blocked"]:
             return self._gate_blocked(debug, row, regime=regime, mkt=mkt,
                                       gate_reason=f"regime:{regime}")
-
-        debug["gate"] = f"PASSED ({regime})"
 
         # === Pré-calcul tendances multi-TF ===
         # 1m — momentum court-terme (entrée précise)
@@ -279,28 +253,14 @@ class StrategyEngine:
         base_threshold = score_threshold if score_threshold is not None else SIGNAL_THRESHOLD_DEFAULT
         threshold = base_threshold + regime_threshold_adj
         debug["regime"] = f"{regime} (ADX={adx_val:.1f}, seuil±2={threshold})"
-        if score >= threshold:
-            level = 2
-        elif score >= 4:
-            level = 1
-        elif score <= -threshold:
-            level = -2
-        elif score <= -4:
-            level = -1
-        else:
-            level = 0
+        level = gates.niveau_depuis_score(score, threshold)
 
         # === Gate 1h : bloquer les trades contre-tendance horaire ===
-        if level == 2 and trend_1h == "bear":
-            debug["gate_1h"] = "BLOCKED — 1h BEARISH vs signal BULLISH"
+        bloque_1h, texte_1h = gates.gate_1h(level, trend_1h)
+        debug["gate_1h"] = texte_1h
+        if bloque_1h:
             return self._gate_blocked(debug, row, regime=regime, mkt=mkt,
                                       gate_reason="gate_1h", trend_1h=trend_1h)
-        elif level == -2 and trend_1h == "bull":
-            debug["gate_1h"] = "BLOCKED — 1h BULLISH vs signal BEARISH"
-            return self._gate_blocked(debug, row, regime=regime, mkt=mkt,
-                                      gate_reason="gate_1h", trend_1h=trend_1h)
-        else:
-            debug["gate_1h"] = f"OK (trend_1h={trend_1h})"
 
         # === Gate ML (optionnel — uniquement si modèle entraîné disponible) ===
         if self.ml_predictor is not None and level in (2, -2):
@@ -318,27 +278,14 @@ class StrategyEngine:
                 "bb_pctB":       float(bb_pctb),
             }
             ml_conf = self.ml_predictor.predict(ml_features)
-            if ml_conf < ML_BLOCK_THRESHOLD:
-                debug["gate_ml"] = f"BLOCKED — confidence={ml_conf:.3f} < {ML_BLOCK_THRESHOLD}"
+            verdict, debug["gate_ml"] = gates.verdict_ml(ml_conf)
+            if verdict == "blocked":
                 return self._gate_blocked(debug, row, regime=regime, mkt=mkt,
                                           gate_reason="gate_ml", trend_1h=trend_1h)
-            elif ml_conf < ML_PENALTY_THRESHOLD:
+            if verdict == "penalty":
                 score -= 1
-                debug["gate_ml"] = f"PENALTY — confidence={ml_conf:.3f} < {ML_PENALTY_THRESHOLD} (-1)"
-                # Re-normaliser après pénalité (conserver l'ajustement régime)
-                threshold = (score_threshold if score_threshold is not None else SIGNAL_THRESHOLD_DEFAULT) + regime_threshold_adj
-                if score >= threshold:
-                    level = 2
-                elif score >= 4:
-                    level = 1
-                elif score <= -threshold:
-                    level = -2
-                elif score <= -4:
-                    level = -1
-                else:
-                    level = 0
-            else:
-                debug["gate_ml"] = f"OK — confidence={ml_conf:.3f}"
+                # Renormaliser après pénalité — le seuil régime reste le même
+                level = gates.niveau_depuis_score(score, threshold)
         else:
             debug["gate_ml"] = "N/A (modèle non entraîné)" if self.ml_predictor is None else "N/A (signal ≠ ±2)"
 

@@ -126,3 +126,24 @@ def test_deux_appels_donnent_le_meme_resultat(moteur):
     b = moteur.compute_signals()
     assert a["raw_score"] == b["raw_score"]
     assert a["score"] == b["score"]
+
+
+def test_le_chemin_gate_bloque_est_lui_aussi_complet(moteur, monkeypatch):
+    """L'autre moitié du moteur, celle qui a survécu à l'incident du 05/09.
+
+    Quand le gate bloque, compute_signals sort par _gate_blocked — une méthode
+    distincte, avec ses propres variables. C'est précisément pour ça qu'elle
+    continuait de fonctionner pendant que le chemin nominal levait NameError :
+    la panne était invisible dans le compte global d'évaluations.
+    """
+    # Marché atone : pas de tendance, bandes resserrées → gate anti-chop
+    monkeypatch.setattr(StrategyEngine, "get_last_n_candles",
+                        lambda self, n=100, tf="1m": _bougies(
+                            {"1m": 60, "15m": 260, "1h": 80}.get(tf, n),
+                            tendance=0.0, graine=3))
+    sig = moteur.compute_signals()
+    assert sig is not None
+    assert sig["score"] == 0, "un marché sans direction ne doit pas donner de signal"
+    assert len(moteur.signal_logger.evaluations) == 1, "l'évaluation doit être journalisée"
+    for champ in ("raw_score", "label", "regime", "debug"):
+        assert champ in sig, f"champ manquant sur le chemin bloqué : {champ}"
