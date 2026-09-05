@@ -22,6 +22,24 @@ dans le contexte, au lieu de dépendre de l'ordre d'exécution.
 import pandas as pd
 
 
+def age_tendance(ema_dir_series):
+    """Nombre de bougies consécutives passées dans le sens actuel de l'EMA.
+
+    Alimente la règle 13 : elle se mesure sur la série entière, pas sur la
+    seule dernière bougie.
+    """
+    if len(ema_dir_series) == 0:
+        return 0
+    sens = ema_dir_series.iloc[-1]
+    age = 0
+    for i in range(len(ema_dir_series) - 1, -1, -1):
+        if ema_dir_series.iloc[i] == sens:
+            age += 1
+        else:
+            break
+    return age
+
+
 def contexte(row, prev, mkt, adx_val, confirms_bull_1m, confirms_bear_1m, ema_age):
     """Rassemble tout ce dont les règles ont besoin, une fois pour toutes."""
     return {
@@ -35,6 +53,14 @@ def contexte(row, prev, mkt, adx_val, confirms_bull_1m, confirms_bear_1m, ema_ag
         "ema_bull": bool(row["EMA9"] > row["EMA21"])
                     if pd.notna(row["EMA9"]) and pd.notna(row["EMA21"]) else False,
         "rsi_val": row["RSI"] if pd.notna(row["RSI"]) else 50.0,
+        # Valeurs dérivées réutilisées hors scoring (document signal, gate ML) :
+        # les exposer ici évite de les recalculer — et évite surtout qu'elles
+        # disparaissent quand les règles bougent.
+        "bb_pctb": row["BB_pctB"] if pd.notna(row["BB_pctB"]) else 0.5,
+        "vol_r": row["vol_ratio"] if pd.notna(row["vol_ratio"]) else 1.0,
+        "funding": mkt["funding_rate"],
+        "imbalance": mkt["ob_imbalance"],
+        "oi_chg": mkt["oi_change_pct"],
     }
 
 
@@ -87,7 +113,7 @@ def rsi(ctx):
 def bollinger(ctx):
     """5. Bollinger %B, confirmé par le RSI (poids x1)."""
     row = ctx["row"]
-    pctb = row["BB_pctB"] if pd.notna(row["BB_pctB"]) else 0.5
+    pctb = ctx["bb_pctb"]
     rsi_val = ctx["rsi_val"]
     if pctb > 0.85 and rsi_val > 55:
         return -1, f"OVEREXTENDED %B={pctb:.2f} (-1)"
@@ -109,7 +135,7 @@ def vwap(ctx):
 def volume(ctx):
     """7. Pic de volume — dans le sens de la bougie (poids x1)."""
     row = ctx["row"]
-    vol_r = row["vol_ratio"] if pd.notna(row["vol_ratio"]) else 1.0
+    vol_r = ctx["vol_r"]
     if vol_r > 1.8:
         candle_dir = 1 if row["close"] > row["open"] else -1
         return candle_dir, f"SPIKE x{vol_r:.1f} ({'+' if candle_dir > 0 else ''}{candle_dir})"
@@ -140,7 +166,7 @@ def momentum_1m(ctx):
 def funding(ctx):
     """10. Funding rate — contrarian, doublé si la pente aggrave (poids x1 ou x2)."""
     mkt = ctx["mkt"]
-    valeur = mkt["funding_rate"]
+    valeur = ctx["funding"]
     pente = mkt["funding_slope"]          # None si moins de 2 relevés
     if valeur is None:
         return 0, "NO DATA (0)"

@@ -261,17 +261,7 @@ class StrategyEngine:
         debug["trend_1h"] = trend_1h
 
         # === Scoring : 13 règles pondérées (voir strategy/scoring_rules.py) ===
-        # L'âge de la tendance EMA se mesure sur la série complète, pas sur la
-        # dernière bougie : il est donc préparé ici, avant d'appeler les règles.
-        ema_dir_series = df_15m["EMA9"] > df_15m["EMA21"]
-        current_dir = ema_dir_series.iloc[-1]
-        ema_age = 0
-        for i in range(len(ema_dir_series) - 1, -1, -1):
-            if ema_dir_series.iloc[i] == current_dir:
-                ema_age += 1
-            else:
-                break
-
+        ema_age = scoring_rules.age_tendance(df_15m["EMA9"] > df_15m["EMA21"])
         ctx = scoring_rules.contexte(
             row=row, prev=prev, mkt=mkt, adx_val=adx_val,
             confirms_bull_1m=confirms_bull_1m, confirms_bear_1m=confirms_bear_1m,
@@ -279,7 +269,10 @@ class StrategyEngine:
         points, debug_regles = scoring_rules.scorer(ctx)
         score += points
         debug.update(debug_regles)
-        rsi_val = ctx["rsi_val"]    # réutilisé plus bas dans le document signal
+        # Réutilisés plus bas (document signal, gate ML) : le contexte en est la
+        # source unique, pour qu'ils ne disparaissent plus quand les règles bougent.
+        rsi_val, bb_pctb, vol_r = ctx["rsi_val"], ctx["bb_pctb"], ctx["vol_r"]
+        funding, imbalance, oi_chg = ctx["funding"], ctx["imbalance"], ctx["oi_chg"]
 
 
         # === Normalisation [-2, +2] ===

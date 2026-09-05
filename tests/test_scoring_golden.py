@@ -163,7 +163,8 @@ def test_la_regle_oi_est_inerte_et_doit_le_rester_sans_decision():
     d'une décision de trading, pas d'un refactor. Le jour où ce choix est fait,
     ce test doit être modifié sciemment, avec le golden master rejoué.
     """
-    base = {"EMA9": 100.0, "EMA21": 90.0, "EMA9_slope": 0.1, "RSI": 50.0}
+    base = {"EMA9": 100.0, "EMA21": 90.0, "EMA9_slope": 0.1, "RSI": 50.0,
+            "BB_pctB": 0.5, "vol_ratio": 1.0}
     for oi, attendu_dans_texte in ((0.05, "ambigu"), (-0.05, "DECLINING")):
         ctx = sr.contexte(
             row=base, prev={"MACD_hist": 0.0},
