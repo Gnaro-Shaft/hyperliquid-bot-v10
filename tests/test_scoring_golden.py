@@ -18,6 +18,7 @@ Deux limites, assumées et signalées :
 """
 
 import ast
+import collections
 import glob
 import re
 
@@ -30,8 +31,11 @@ POINTS = re.compile(r"\(([+-]?\d)\)\s*$")
 
 # Règles comparables une à une : leur texte survit dans l'archive et leurs
 # entrées tiennent dans une seule ligne.
+# "oi" en est SORTI le 05/09/2026 : la règle a été activée, l'archive a été
+# produite avec sa version inerte. Son écart est modélisé explicitement dans le
+# test de somme, ce qui garde le golden master exploitable.
 COMPARABLES = ["ema_trend", "macd", "rsi", "bb", "vwap", "volume",
-               "adx_bonus", "momentum_1m", "funding", "oi", "ema_age"]
+               "adx_bonus", "momentum_1m", "funding", "ema_age"]
 
 
 def _points_archives(texte):
@@ -126,10 +130,12 @@ def test_regle_reproduit_la_production(cle, echantillon):
 
 
 def test_somme_des_13_regles_egale_le_raw_score(echantillon):
-    """Vérification de bout en bout, y compris la règle 12 non comparable seule.
+    """Vérification de bout en bout, avec l'écart de la règle 11 modélisé.
 
-    La règle 3 est reprise de l'archive (elle dépend de la bougie précédente) ;
-    les douze autres sont calculées par le code extrait.
+    La règle 3 est reprise de l'archive (elle dépend de la bougie précédente).
+    La règle 11 a été ACTIVÉE le 05/09/2026 alors que l'archive a été produite
+    avec sa version inerte : son apport est donc retranché pour retrouver le
+    raw_score d'époque. Si une autre règle dérivait, ce test le verrait encore.
     """
     ecarts = []
     for l in echantillon:
@@ -142,6 +148,9 @@ def test_somme_des_13_regles_egale_le_raw_score(echantillon):
                     total = None
                     break
                 total += p
+            elif cle == "oi":
+                # Règle activée après coup : neutralisée pour comparer à l'archive
+                continue
             else:
                 total += regle(ctx)[0]
         if total is not None and total != l["raw_score"]:
@@ -151,29 +160,50 @@ def test_somme_des_13_regles_egale_le_raw_score(echantillon):
     assert not ecarts, f"{len(ecarts)}/{len(echantillon)} écarts. 3 premiers : {ecarts[:3]}"
 
 
-def test_la_regle_oi_est_inerte_et_doit_le_rester_sans_decision():
-    """Verrou explicite sur un comportement hérité de v8.
+def _ctx_oi(oi, ema9, ema21):
+    return sr.contexte(
+        row={"EMA9": ema9, "EMA21": ema21, "EMA9_slope": 0.1, "RSI": 50.0,
+             "BB_pctB": 0.5, "vol_ratio": 1.0},
+        prev={"MACD_hist": 0.0},
+        mkt={"funding_rate": None, "funding_slope": None,
+             "oi_trend_30m": oi, "oi_change_pct": oi,
+             "ob_imbalance_avg": None, "ob_imbalance": None},
+        adx_val=25.0, confirms_bull_1m=False, confirms_bear_1m=False, ema_age=10,
+    )
 
-    La règle 11 ne rapporte jamais de points, même quand l'open interest bouge
-    fortement : v8 teste `ema_bull is True` contre un `numpy.bool_`, qui n'est
-    jamais le singleton Python. Constaté sur 22 037 évaluations archivées.
 
-    Ce test échouera si quelqu'un « répare » la règle. C'est voulu : l'activer
-    change la stratégie — un signal sur treize se met à peser — et cela relève
-    d'une décision de trading, pas d'un refactor. Le jour où ce choix est fait,
-    ce test doit être modifié sciemment, avec le golden master rejoué.
+@pytest.mark.parametrize("oi,ema9,ema21,attendu", [
+    (0.05, 100, 90, 1),    # OI grossit dans le sens de la tendance : confirmation
+    (0.05, 90, 100, -1),   # OI grossit à contre-sens : positions du mauvais côté
+    (-0.05, 100, 90, -1),  # OI décroît en tendance haussière : désengagement
+    (-0.05, 90, 100, 1),   # OI décroît en tendance baissière : short qui se vide
+    (0.001, 100, 90, 0),   # variation < 0.2% : non significative
+])
+def test_table_de_decision_de_la_regle_oi(oi, ema9, ema21, attendu):
+    """La règle 11, ACTIVÉE le 05/09/2026 après six semaines d'inertie.
+
+    Elle testait `ema_bull is True` contre un numpy.bool_ — jamais le singleton
+    Python — et tombait donc systématiquement dans les cas par défaut. Mesuré
+    avant activation sur 1 458 913 évaluations : 31,7 % des scores et 5,57 % des
+    niveaux auraient changé.
     """
-    base = {"EMA9": 100.0, "EMA21": 90.0, "EMA9_slope": 0.1, "RSI": 50.0,
-            "BB_pctB": 0.5, "vol_ratio": 1.0}
-    for oi, attendu_dans_texte in ((0.05, "ambigu"), (-0.05, "DECLINING")):
-        ctx = sr.contexte(
-            row=base, prev={"MACD_hist": 0.0},
-            mkt={"funding_rate": None, "funding_slope": None,
-                 "oi_trend_30m": oi, "oi_change_pct": oi,
-                 "ob_imbalance_avg": None, "ob_imbalance": None},
-            adx_val=25.0, confirms_bull_1m=False, confirms_bear_1m=False, ema_age=10,
-        )
-        points, texte = sr.open_interest(ctx)
-        assert points == 0, f"la règle OI a été activée (oi={oi})"
-        assert attendu_dans_texte in texte
-        assert texte.endswith("(0)")
+    points, _ = sr.open_interest(_ctx_oi(oi, ema9, ema21))
+    assert points == attendu
+
+
+def test_l_archive_temoigne_de_l_ancienne_inertie():
+    """Trace historique : avant activation, la règle ne rapportait jamais rien.
+
+    Ce test lit l'archive, pas le code : il documente ce qui s'est passé, et
+    explique pourquoi "oi" ne figure plus dans COMPARABLES.
+    """
+    lignes = _echantillon(600)
+    if len(lignes) < 100:
+        pytest.skip("échantillon insuffisant")
+    points = [_points_archives(l["_debug"]["oi"]) for l in lignes
+              if isinstance(l["_debug"].get("oi"), str)]
+    points = [p for p in points if p is not None]
+    assert points, "aucun verdict OI lisible dans l'archive"
+    assert set(points) == {0}, (
+        "l'archive contient des points OI non nuls : l'hypothèse d'inertie "
+        f"est fausse ({collections.Counter(points)})")

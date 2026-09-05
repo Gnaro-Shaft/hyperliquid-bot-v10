@@ -163,6 +163,34 @@ Sa ligne `action=close` existera normalement.
 Choix délibéré de ne pas la reconstituer : dans un dataset destiné au backtest, une
 ligne fabriquée serait indiscernable d'une ligne réelle. Un trou identifié vaut mieux.
 
+### Règle 11 (open interest) activée le 05/09/2026 — DISCONTINUITÉ
+
+Un indicateur sur treize n'a **jamais** contribué au score entre le 10/07 et le
+05/09/2026. Le moteur testait `ema_bull is True` alors qu'`ema_bull` provient
+d'une comparaison pandas, donc un `numpy.bool_`, qui n'est jamais le singleton
+Python. Les branches attribuant ±1 n'étaient jamais atteintes.
+
+**Toute analyse portant à cheval sur le 05/09/2026 mélange deux moteurs.**
+
+Impact mesuré sur les 1 458 913 évaluations archivées avant activation
+(gate passé, en rejouant la règle telle qu'activée) :
+
+| | |
+|---|---|
+| Score brut modifié (±1) | 462 178 — 31,7 % |
+| Niveau de signal modifié | 81 210 — 5,57 % |
+| Entrées supplémentaires (±2 gagné) | 11 294 |
+| Entrées supprimées (±2 perdu) | 2 327 |
+
+L'écart est **exactement reproductible** : la règle est déterministe à partir de
+`oi_trend_30m` (ou `oi_change_pct` à défaut), `ema9` et `ema21`, toutes trois
+présentes dans l'archive. Pour homogénéiser une analyse, recalculer le delta
+plutôt que de rescorer — les décisions prises à l'époque l'ont été sur les
+scores d'époque, les réécrire falsifierait l'historique.
+
+Le comportement d'origine est documenté par un test qui lit l'archive
+(`tests/test_scoring_golden.py::test_l_archive_temoigne_de_l_ancienne_inertie`).
+
 ### `pytest` écrivait dans la base de production — corrigé le 05/09/2026
 
 `tests/test_paper_trader.py` neutralisait `PaperTrader._connect`, mais `TradeLogger`

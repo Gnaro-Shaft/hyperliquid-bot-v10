@@ -185,21 +185,20 @@ def funding(ctx):
 def open_interest(ctx):
     """11. Open interest sur 30 min, croisé avec la tendance EMA (poids x1).
 
-    ATTENTION — cette règle est INERTE depuis l'origine, et c'est reproduit ici
-    tel quel : v8 teste `ema_bull is True` / `is False`, or `ema_bull` provient
-    d'une comparaison pandas et vaut donc un `numpy.bool_`, qui n'est jamais le
-    singleton Python. Les branches attribuant ±1 ne sont jamais atteintes ; le
-    flux tombe systématiquement dans les cas par défaut, à 0 point.
+    Un OI qui grossit dans le sens de la tendance la confirme ; un OI qui
+    grossit à contre-sens signale des positions qui s'accumulent du mauvais
+    côté. Un OI qui décroît traduit un désengagement, donc un affaiblissement.
 
-    Mesuré sur 22 037 évaluations archivées entre le 10/07 et le 22/08/2026 :
-    aucune n'a reçu ±1. Dans 35 % des cas la variation d'OI était pourtant
-    significative (>= 0,2 %) et aurait dû peser.
+    ACTIVÉE le 05/09/2026. Cette règle n'avait JAMAIS rapporté de points depuis
+    l'origine : v8 testait `ema_bull is True` contre un numpy.bool_, qui n'est
+    jamais le singleton Python, et le flux tombait dans les cas par défaut.
+    Mesuré sur 1 458 913 évaluations archivées avant activation : 31,7 % des
+    scores et 5,57 % des niveaux de signal auraient changé (11 294 entrées
+    supplémentaires, 2 327 supprimées).
 
-    Corriger ce comportement CHANGERAIT la stratégie — c'est une décision de
-    trading, pas de refactor. Les branches mortes sont conservées visibles
-    ci-dessous plutôt que supprimées, pour que le choix reste possible.
+    Le dataset porte donc une discontinuité à cette date — voir docs/SCHEMA.md.
     """
-    mkt = ctx["mkt"]
+    mkt, ema_bull = ctx["mkt"], ctx["ema_bull"]
     oi_trend = mkt.get("oi_trend_30m")
     oi_val = oi_trend if oi_trend is not None else mkt["oi_change_pct"]
     if oi_val is None:
@@ -207,15 +206,13 @@ def open_interest(ctx):
     src = "30m" if oi_trend is not None else "1poll"
     if abs(oi_val) < 0.002:               # variation < 0.2% : non significative
         return 0, f"OI STABLE {oi_val*100:.3f}% ({src}) (0)"
-
-    # --- Branches jamais atteintes en production (voir docstring) ---
-    #   oi_val > 0 et tendance haussière  -> +1  "OI GROWING ... BULL (+1)"
-    #   oi_val > 0 et tendance baissière  -> -1  "OI GROWING ... BEAR (-1)"
-    #   oi_val < 0 et tendance haussière  -> -1  "OI DECLINING ... BULL WEAKENING (-1)"
-    #   oi_val < 0 et tendance baissière  -> +1  "OI DECLINING ... BEAR WEAKENING (+1)"
-    if oi_val < 0:
-        return 0, f"OI DECLINING {oi_val*100:.3f}% ({src}) (0)"
-    return 0, f"OI {oi_val*100:.3f}% ({src}) ambigu (0)"
+    if oi_val > 0:
+        if ema_bull:
+            return 1, f"OI GROWING +{oi_val*100:.3f}% ({src}) BULL (+1)"
+        return -1, f"OI GROWING +{oi_val*100:.3f}% ({src}) BEAR (-1)"
+    if ema_bull:
+        return -1, f"OI DECLINING {oi_val*100:.3f}% ({src}) BULL WEAKENING (-1)"
+    return 1, f"OI DECLINING {oi_val*100:.3f}% ({src}) BEAR WEAKENING (+1)"
 
 
 def ob_imbalance(ctx):
