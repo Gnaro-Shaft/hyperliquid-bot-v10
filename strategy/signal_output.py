@@ -12,7 +12,7 @@ logger, ce qui les rend vérifiables sans instancier quoi que ce soit.
 
 import pandas as pd
 
-from config import LEVELS, DEBUG, SL_PCT, TP_PCT, MIN_TP_PCT
+from config import LEVELS, DEBUG, SL_PCT, TP_PCT, MIN_TP_PCT, ATR_SL_MULT
 from utils.sizing import dynamic_sl_tp
 
 
@@ -31,7 +31,7 @@ def tp_sl_dynamiques(atr_val, close, sl_mult, tp_mult):
     les valeurs statiques de la configuration — et le debug le dit, pour qu'une
     ligne d'archive permette de savoir laquelle des deux voies a servi.
     """
-    sl, tp = dynamic_sl_tp(atr_val, close, SL_PCT, TP_PCT, MIN_TP_PCT)
+    sl, tp = dynamic_sl_tp(atr_val, close, SL_PCT, TP_PCT, MIN_TP_PCT, ATR_SL_MULT)
     sl *= sl_mult
     tp *= tp_mult
 
@@ -39,7 +39,7 @@ def tp_sl_dynamiques(atr_val, close, sl_mult, tp_mult):
         atr_pct = atr_val / close
         debug = {
             "atr": f"{atr_val:.4f} ({atr_pct*100:.4f}%)",
-            "dynamic_sl": f"{sl*100:.3f}% (raw ATR*1.5={atr_pct*1.5*100:.4f}%)",
+            "dynamic_sl": f"{sl*100:.3f}% (raw ATR*{ATR_SL_MULT}={atr_pct*ATR_SL_MULT*100:.4f}%)",
             "dynamic_tp": f"{tp*100:.3f}% (R:R={tp/sl:.1f}:1)",
         }
     else:

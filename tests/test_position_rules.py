@@ -146,3 +146,26 @@ def test_pnl_dans_les_deux_sens():
     assert regles.pnl_realise("buy", 100, 110, 2) == pytest.approx(20)
     assert regles.pnl_realise("sell", 100, 90, 2) == pytest.approx(20)
     assert regles.pnl_realise("buy", 100, 90, 2) == pytest.approx(-20)
+
+
+# ── Durée maximale de détention ──────────────────────────────────────────────
+
+def test_detention_expiree_quand_la_duree_est_depassee():
+    assert regles.detention_expiree(1000.0, 1000.0 + 7 * 86400, 7 * 86400)
+    assert regles.detention_expiree(1000.0, 1000.0 + 8 * 86400, 7 * 86400)
+
+
+def test_detention_non_expiree_avant_l_echeance():
+    assert not regles.detention_expiree(1000.0, 1000.0 + 6 * 86400, 7 * 86400)
+
+
+def test_detention_sans_open_time_ne_ferme_rien():
+    """Position reprise après redémarrage : fermer sur une date inventée serait
+    pire que laisser courir."""
+    assert not regles.detention_expiree(None, 1e9, 7 * 86400)
+    assert not regles.detention_expiree(0, 1e9, 7 * 86400)
+
+
+def test_plafond_desactive_par_une_duree_nulle():
+    assert not regles.detention_expiree(1000.0, 1e9, 0)
+    assert not regles.detention_expiree(1000.0, 1e9, None)

@@ -102,6 +102,20 @@ def tp_sl_franchi(side, last_price, current_tp, sl_price):
     return False, False
 
 
+def detention_expiree(open_time, maintenant, duree_max):
+    """La position a-t-elle dépassé la durée de détention maximale ?
+
+    `open_time` peut manquer — position reprise après un redémarrage, entrée
+    mal enregistrée. On ne ferme alors rien : fermer sur une date inventée
+    serait pire que laisser courir, et le cas se voit dans les logs.
+
+    `duree_max` à 0 ou None désactive le plafond.
+    """
+    if not open_time or not duree_max:
+        return False
+    return (maintenant - open_time) >= duree_max
+
+
 def pnl_realise(side, entry, exit_price, size):
     """PnL d'une position fermée, dans la devise de cotation."""
     return (exit_price - entry) * size if side == "buy" else (entry - exit_price) * size

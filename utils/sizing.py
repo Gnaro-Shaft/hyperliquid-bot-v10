@@ -33,17 +33,23 @@ def size_factor(raw_score, dynamic_sl, sl_pct, pnl_today,
     return round(max(0.3, min(1.0, signal_factor * vol_factor * risk_factor)), 2)
 
 
-def dynamic_sl_tp(atr_val, close, sl_pct, tp_pct, min_tp_pct):
+def dynamic_sl_tp(atr_val, close, sl_pct, tp_pct, min_tp_pct, atr_mult=1.5):
     """Retourne (dynamic_sl, dynamic_tp) en fraction du prix.
 
-    Avec ATR : SL = clamp(ATR/close × 1.5, sl_pct/2, sl_pct×2), TP = max(SL×2, min_tp_pct).
+    Avec ATR : SL = clamp(ATR/close × atr_mult, sl_pct/2, sl_pct×2),
+               TP = max(SL×2, min_tp_pct).
     Sans ATR : fallback statique SL = sl_pct, TP = max(tp_pct, sl_pct×1.5).
+
+    `atr_mult` est un paramètre pour que ce module reste pur — il ne lit pas la
+    configuration. Le défaut de 1.5 est la valeur historique ; l'appelant passe
+    ATR_SL_MULT. Il doit suivre l'échelle de `sl_pct` : sinon le plancher
+    `sl_pct × 0.5` saturerait, et le stop cesserait de suivre la volatilité.
     """
     dynamic_sl = sl_pct
     dynamic_tp = tp_pct
     if atr_val and close > 0:
         atr_pct = atr_val / close
-        raw_sl = atr_pct * 1.5
+        raw_sl = atr_pct * atr_mult
         dynamic_sl = max(raw_sl, sl_pct * 0.5)
         dynamic_sl = min(dynamic_sl, sl_pct * 2)
         dynamic_tp = dynamic_sl * 2.0

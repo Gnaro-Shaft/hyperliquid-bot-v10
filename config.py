@@ -26,8 +26,15 @@ COINS = [p.split("/")[0] for p in PAIRS]   # "BTC/USDC:USDC" -> "BTC"
 
 MIN_COLLATERAL = {pair: 10 for pair in PAIRS}   # notionnel minimum HL ~$10
 
-# === MONEY MANAGEMENT (inchangé — collecte tiny-size) ===
-POSITION_SIZE_PCT = 0.30        # 30% du solde par trade
+# === MONEY MANAGEMENT ===
+# 0,30 → 0,06 le 05/09/2026, en contrepartie de l'échelle ×5 des distances.
+#
+# `size_factor` amortit d'habitude un stop qui s'élargit, mais son terme
+# `vol_factor` vaut SL_PCT / dynamic_sl : c'est un RAPPORT, que multiplier les
+# deux termes par 5 laisse inchangé. Sans cette compensation explicite, le
+# risque par trade serait passé de 0,144 % à 0,72 % du solde — un facteur 5
+# silencieux. Ici il reste à 0,144 %.
+POSITION_SIZE_PCT = 0.06        # 6% du solde par trade
 RESERVE_BALANCE_PCT = 0.20      # 20% toujours en reserve
 
 # === TIMEFRAMES ===
@@ -46,16 +53,41 @@ LEVELS = {
 }
 
 # === SL / TP / TRAILING (moteur conservé) ===
-SL_PCT = 0.012                  # Stop Loss 1.2%
-TP_PCT = 0.03                   # Take Profit 3% (R:R = 2.5:1)
-MIN_TP_PCT = 0.02               # TP minimum 2%
-TRAIL_PCT = 0.006               # Trailing Stop 0.6%
-TRAILING_TRIGGER_PCT = 0.010    # Active le trailing apres +1.0%
-TRAILING_STEP_PCT = 0.003       # Rehausse le stop tous les +0.3%
+#
+# Échelle ×5 le 05/09/2026. Toutes les distances ont été multipliées par 5, et
+# rien d'autre n'a bougé : les rapports entre elles sont ceux d'avant.
+#
+# Motif : le handicap de frais. Avec les anciennes barrières (favorable 1,0 % /
+# adverse 0,66 %) et 0,09 % de frais aller-retour, il fallait battre la marche
+# aléatoire de 5,42 points pour seulement rentrer dans ses frais — alors que
+# 1 074 setups ne permettent d'en détecter que 3,5. Le handicap dépassait la
+# résolution de la mesure : aucun edge, même réel, n'aurait pu être ni démontré
+# ni encaissé. À cette échelle il tombe à 1,12 point.
+#
+# Voir docs/falsification-2026-09-05.md et docs/protocole-pre-enregistre.md.
+# Contrepartie : détention médiane ~43 h au lieu de ~2 h.
+SL_PCT = 0.060                  # Stop Loss 6% (plancher effectif : 3%)
+TP_PCT = 0.150                  # Take Profit 15% (repli sans ATR)
+MIN_TP_PCT = 0.100              # TP minimum 10%
+TRAIL_PCT = 0.030               # Trailing Stop 3%
+TRAILING_TRIGGER_PCT = 0.050    # Active le trailing apres +5.0%
+TRAILING_STEP_PCT = 0.015       # Rehausse le stop tous les +1.5%
+
+# Multiplicateur ATR du stop dynamique. Mis à l'échelle avec le reste : sous
+# l'ancienne valeur (1,5), le plancher saturait 73,4 % du temps ; le porter à
+# 7,5 conserve exactement cette proportion au lieu de la faire tomber à 100 %.
+ATR_SL_MULT = 7.5
 
 # === BREAKEVEN STOP ===
-BREAKEVEN_TRIGGER_PCT = 0.010   # Protéger seulement après +1.0%
-BREAKEVEN_OFFSET_PCT = 0.002    # SL placé à entry + 0.2%
+BREAKEVEN_TRIGGER_PCT = 0.050   # Protéger seulement après +5.0%
+BREAKEVEN_OFFSET_PCT = 0.010    # SL placé à entry + 1.0%
+
+# === DURÉE MAXIMALE DE DÉTENTION ===
+# Aligné sur l'horizon du test de barrière du protocole pré-enregistré : sans
+# ce plafond, le bot et la mesure ne parleraient pas du même objet. 17 % des
+# setups ne se résolvent pas sous 7 jours ; avec 2 positions simultanées au
+# maximum, une position bloquée gèlerait la moitié du débit.
+MAX_HOLD_SEC = 7 * 24 * 3600
 
 # === ANTI-OVERTRADING ===
 MAX_CONSECUTIVE_LOSSES = 3

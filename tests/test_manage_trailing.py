@@ -10,6 +10,7 @@ L'oracle n'est pas du code mort : il documente le comportement de v8 et fera
 """
 
 import random
+import time
 
 import pytest
 
@@ -178,3 +179,63 @@ def test_position_sans_entree_ne_declenche_rien():
     b.positions["BTC"] = _position(0, "buy")
     b.manage_trailing("BTC", 100.0)
     assert b.trader.appels == []
+
+
+# ── Plafond de détention ─────────────────────────────────────────────────────
+
+def _bot_avec_position(open_time, side="buy", entry=100.0):
+    """PositionManager doté d'une position ouverte, sur trader factice."""
+    trader = FauxTrader()
+    positions = {"BTC": empty_position()}
+    positions["BTC"].update(active=True, entry=entry, side=side, size=1.0,
+                            open_time=open_time)
+    # `adjust_cooldown` lit cooldowns[coin] : la clé doit préexister, comme en
+    # production où elle est initialisée pour toutes les paires au démarrage.
+    mgr = PositionManager(trader, FauxRisk(), None, positions,
+                          {"BTC": 600}, {"BTC": 0.0})
+    return mgr, trader, positions
+
+
+def test_position_fermee_quand_la_detention_max_est_atteinte(monkeypatch):
+    import trader.position_manager as pm
+    monkeypatch.setattr(pm, "MAX_HOLD_SEC", 7 * 86400)
+    mgr, trader, positions = _bot_avec_position(open_time=time.time() - 8 * 86400)
+
+    mgr.manage_trailing("BTC", 101.0)
+
+    assert ("close", "max_hold") in trader.appels
+    assert not positions["BTC"]["active"]
+
+
+def test_position_jeune_nest_pas_fermee(monkeypatch):
+    import trader.position_manager as pm
+    monkeypatch.setattr(pm, "MAX_HOLD_SEC", 7 * 86400)
+    mgr, trader, positions = _bot_avec_position(open_time=time.time() - 3600)
+
+    mgr.manage_trailing("BTC", 101.0)
+
+    assert ("close", "max_hold") not in trader.appels
+    assert positions["BTC"]["active"]
+
+
+def test_le_plafond_ne_depend_pas_du_prix(monkeypatch):
+    """Il est évalué avant le garde-fou sur le prix : une position expirée doit
+    se fermer même si le flux de prix est momentanément absent."""
+    import trader.position_manager as pm
+    monkeypatch.setattr(pm, "MAX_HOLD_SEC", 7 * 86400)
+    mgr, trader, positions = _bot_avec_position(open_time=time.time() - 8 * 86400)
+
+    mgr.manage_trailing("BTC", None)
+
+    assert ("close", "max_hold") in trader.appels
+
+
+def test_position_sans_open_time_survit_au_plafond(monkeypatch):
+    import trader.position_manager as pm
+    monkeypatch.setattr(pm, "MAX_HOLD_SEC", 7 * 86400)
+    mgr, trader, positions = _bot_avec_position(open_time=None)
+
+    mgr.manage_trailing("BTC", 101.0)
+
+    assert ("close", "max_hold") not in trader.appels
+    assert positions["BTC"]["active"]

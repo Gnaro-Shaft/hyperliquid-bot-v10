@@ -191,6 +191,48 @@ scores d'époque, les réécrire falsifierait l'historique.
 Le comportement d'origine est documenté par un test qui lit l'archive
 (`tests/test_scoring_golden.py::test_l_archive_temoigne_de_l_ancienne_inertie`).
 
+### Géométrie SL/TP multipliée par 5 le 05/09/2026 — DISCONTINUITÉ
+
+Toutes les distances de sortie ont été mises à l'échelle ×5 le même jour, et
+rien d'autre n'a changé — les rapports entre elles sont ceux d'avant.
+
+| | avant | après |
+|---|---|---|
+| `dynamic_sl` (médiane) | 0,600 % | **3,000 %** |
+| `dynamic_tp` (médiane, régime STRONG) | 2,500 % | **12,500 %** |
+| déclenchement du trailing | 1,0 % | **5,0 %** |
+| distance du trailing | 0,6 % | **3,0 %** |
+| notionnel par trade | 24 % du solde | **4,8 %** |
+| risque par trade | 0,1440 % du solde | **0,1440 %** (inchangé) |
+
+**Motif** : le handicap de frais. Avec les anciennes barrières, il fallait
+battre la marche aléatoire de 5,42 points pour seulement couvrir les frais,
+alors que 1 074 setups n'en détectent que ~3,5 — le handicap dépassait la
+résolution de la mesure. Il tombe à 1,12 point.
+Voir `falsification-2026-09-05.md` et `protocole-pre-enregistre.md`.
+
+**Conséquences pour l'analyse :**
+
+- Les colonnes `dynamic_sl` et `dynamic_tp` changent d'échelle à cette date.
+  Une analyse à cheval mélange deux géométries : les comparer directement n'a
+  pas de sens.
+- Les scores, niveaux et features ne sont **pas** touchés. Seules les sorties
+  le sont. Une étude portant sur le signal seul reste homogène de part et
+  d'autre — sous réserve de la discontinuité de la règle 11, ci-dessus.
+- La durée de détention change d'ordre de grandeur : médiane ~2 h avant,
+  ~43 h attendues après. Les trades des deux périodes ne sont pas comparables.
+- Nouvelle cause de clôture dans `paper_trades` : `max_hold`, à 7 jours
+  (`MAX_HOLD_SEC`), alignée sur l'horizon du test de barrière. 17 % des setups
+  ne se résolvent pas sous ce délai.
+- Le notionnel minimal (12 USDC) est désormais atteint sous **833 USDC** de
+  solde, contre 150 auparavant. Sous ce seuil, `taille_ordre` remonte la taille
+  au minimum — le risque effectif y devient supérieur au nominal calculé, tout
+  en restant sous 0,144 %.
+
+Les invariants qui justifient ces valeurs sont vérifiés par
+`tests/test_geometrie.py`, dont la capacité à détecter une mise à l'échelle
+incomplète a été prouvée en réintroduisant les quatre fautes possibles.
+
 ### `pytest` écrivait dans la base de production — corrigé le 05/09/2026
 
 `tests/test_paper_trader.py` neutralisait `PaperTrader._connect`, mais `TradeLogger`

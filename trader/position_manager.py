@@ -17,7 +17,7 @@ import time
 
 from config import (
     DEBUG, PAIRS, TRAIL_PCT, TRAILING_TRIGGER_PCT, TRAILING_STEP_PCT,
-    BREAKEVEN_TRIGGER_PCT, BREAKEVEN_OFFSET_PCT,
+    BREAKEVEN_TRIGGER_PCT, BREAKEVEN_OFFSET_PCT, MAX_HOLD_SEC,
 )
 from risk import guards
 from trader import position_rules as regles
@@ -90,7 +90,20 @@ class PositionManager:
         entry, side = pos["entry"], pos["side"]
 
         # Garde-fou : si entry est manquant ou nul, on ne peut rien calculer
-        if not entry or not side or not last_price:
+        if not entry or not side:
+            return
+
+        # Plafond de détention — évalué avant le prix, dont il ne dépend pas.
+        # Aligne le bot sur l'horizon de 7 jours du test de barrière : sans
+        # lui, une position non résolue gèlerait un des deux emplacements
+        # indéfiniment.
+        if regles.detention_expiree(pos.get("open_time"), time.time(), MAX_HOLD_SEC):
+            age_h = (time.time() - pos["open_time"]) / 3600
+            print(f"[BOT][{coin}] ⏳ Détention max atteinte ({age_h:.1f} h) — clôture")
+            self._close_on_max_hold(coin)
+            return
+
+        if not last_price:
             return
 
         trail_dist = pos.get("trail_distance", TRAIL_PCT)
@@ -149,6 +162,16 @@ class PositionManager:
                 print(f"[BOT][{coin}] 🔔 Trailing touché "
                       f"({last_price:.6g} {comparaison} {pos['trailing']:.6g})")
                 self._close_on_trailing(coin)
+
+    def _close_on_max_hold(self, coin):
+        """Ferme une position qui a dépassé la durée de détention maximale."""
+        result = self.trader.close_position(
+            reason="max_hold", context=self.context(coin))
+        if result:
+            self.risk.register_trade_result(result["pnl"])
+            guards.adjust_cooldown(self.cooldowns, coin, result["pnl"])
+        self.last_trade_times[coin] = time.time()
+        self.positions[coin] = empty_position()
 
     def _close_on_trailing(self, coin):
         """Ferme la position sur déclenchement du stop suiveur."""
