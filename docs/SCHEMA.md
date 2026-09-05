@@ -163,8 +163,14 @@ Sa ligne `action=close` existera normalement.
 Choix délibéré de ne pas la reconstituer : dans un dataset destiné au backtest, une
 ligne fabriquée serait indiscernable d'une ligne réelle. Un trou identifié vaut mieux.
 
-### Mise en garde — `pytest` écrit dans la base de production
+### `pytest` écrivait dans la base de production — corrigé le 05/09/2026
 
-`tests/test_paper_trader.py` neutralise `PaperTrader._connect`, mais `TradeLogger`
-ouvre alors son propre client vers `MONGO_URL` et insère de vrais documents dans
-`paper_trades`. Lancer la suite avec `env MONGO_URL= …` tant que ce n'est pas corrigé.
+`tests/test_paper_trader.py` neutralisait `PaperTrader._connect`, mais `TradeLogger`
+ouvrait alors son propre client vers `MONGO_URL` et insérait de vrais documents dans
+`paper_trades` : c'est l'origine des deux anomalies ci-dessus.
+
+`tests/conftest.py` rend désormais la suite hermétique — `MongoClient` y lève une
+exception, dans `pymongo` comme dans chaque module du projet. `tests/test_isolation.py`
+vérifie que la garde est active, y compris pour un module importé en cours de session.
+Toute donnée de `paper_trades` antérieure au 05/09/2026 05:00 UTC peut donc contenir
+des artefacts de tests ; au-delà, non.
