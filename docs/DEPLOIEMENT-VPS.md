@@ -114,12 +114,47 @@ le VPS il mourrait avec le bot — c'est exactement ce qui s'est produit le
 22/08/2026, où le watchdog vivait sur homeserv01, machine retirée du tailnet le
 jour même.
 
-## Sauvegarde de l'archive
+## Sauvegarde de l'archive — homeserv02 TIRE, le VPS ne pousse pas
 
-```bash
-rsync -az /opt/v10/data/parquet/ root@homeserv02:/data/backups/V10-archive/parquet/
-rsync -an --checksum ...   # vérification : aucune ligne = copies identiques
+Le sens du lien suit l'exposition des machines. Le VPS écoute sur Internet ; lui
+donner une clé vers homeserv02 ferait d'une compromission du VPS un accès aux
+sauvegardes de tous les projets. À l'inverse, homeserv02 tire avec une clé
+**verrouillée côté VPS** :
+
 ```
+command="/usr/bin/rrsync -ro /opt/v10/data/parquet",restrict ssh-ed25519 AAAA...
+```
+
+Une compromission de homeserv02 ne donne alors qu'une lecture seule du
+répertoire d'archive — jamais le `.env`, jamais les clés de trading.
+
+Utilisateur dédié `v10archive` sur le VPS (système, sans sudo). Clé dédiée
+`/root/.ssh/v10_archive` sur homeserv02, révocable indépendamment de `id_rsa`.
+
+Unités : `v10-archive-pull.service` + `.timer`, **sur homeserv02**, à 03:10 UTC —
+après l'export du VPS (02:20) et la purge qui le suit. **Pas de `--delete`** :
+la sauvegarde accumule et met à jour, une suppression accidentelle côté VPS ne
+se propage pas.
+
+### Vérification du verrouillage
+
+Éprouvé le 05/09/2026 depuis homeserv02 :
+
+| Tentative | Résultat |
+|---|---|
+| `ssh … 'cat /opt/v10/.env'` | `SSH_ORIGINAL_COMMAND does not run rsync` |
+| Shell interactif | `Not invoked via sshd` |
+| Redirection de port `-L` | bloquée (`restrict`) |
+| `rsync` depuis `/etc/` | résolu en `/opt/v10/data/parquet/etc` — confiné |
+| Écriture vers le VPS | `sending to read-only server is not allowed` |
+| Tirage de l'archive | 4 657 fichiers, 547 Mo ✅ |
+
+### Angle mort connu
+
+**Rien n'alerte si la sauvegarde cesse.** Le watchdog surveille la collecte et
+l'expiration des clés, pas la fraîcheur de cette copie. Piste : que le service
+écrive un marqueur horodaté dans Mongo, et que le watchdog s'alarme au-delà de
+48 h.
 
 ## Historique — pourquoi ces choix
 

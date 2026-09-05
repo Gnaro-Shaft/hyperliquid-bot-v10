@@ -1,0 +1,22 @@
+# Sauvegarde de l'archive Parquet — à installer sur la machine de SAUVEGARDE
+# (homeserv02), pas sur le VPS.
+#
+# C'est la sauvegarde qui TIRE, jamais le VPS qui pousse : le VPS est la machine
+# exposée à Internet. Une compromission de la sauvegarde ne donne alors qu'un
+# accès en lecture seule au répertoire d'archive — jamais au .env ni aux clés de
+# trading. La clé est verrouillée côté VPS par
+# command="/usr/bin/rrsync -ro /opt/v10/data/parquet",restrict
+#
+# Pas de --delete : la sauvegarde n'accumule et ne met à jour que. Une
+# suppression accidentelle côté VPS ne peut pas se propager ici.
+[Unit]
+Description=Sauvegarde de l'archive Parquet V10 depuis le VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rsync -a --info=stats1 \
+    -e "ssh -i /root/.ssh/v10_archive -o BatchMode=yes -o ConnectTimeout=20" \
+    v10archive@54.38.65.228:/ /data/backups/V10-archive/parquet/
+SyslogIdentifier=v10-archive-pull

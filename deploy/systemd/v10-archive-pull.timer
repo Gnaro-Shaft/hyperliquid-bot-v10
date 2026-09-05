@@ -1,0 +1,11 @@
+# 03:10 UTC : après l'export du VPS (02:20) et la purge qui le suit.
+[Unit]
+Description=Sauvegarde quotidienne de l'archive V10
+
+[Timer]
+OnCalendar=*-*-* 03:10:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
