@@ -42,6 +42,7 @@ from collector.whale_collector import WhaleCollector
 from datalog.signal_logger import SignalLogger
 from risk.risk_manager import RiskManager
 from risk import guards
+from trader import position_rules as regles
 from datalog import reporting
 from datalog.decision_log import log_decision
 from utils import mongo
@@ -576,7 +577,7 @@ class TradingBot:
         last_fill = self.trader.get_last_closed_trade(since_ms=since_ms)
         exit_price = last_fill["price"] if (last_fill and last_fill["price"] > 0) else fallback_price
 
-        pnl = (exit_price - entry) * size if side == "buy" else (entry - exit_price) * size
+        pnl = regles.pnl_realise(side, entry, exit_price, size)
 
         print(f"[BOT][{coin}] ⚡ Fermé par l'exchange | {entry:.6g} → {exit_price:.6g} | PnL: {pnl:+.4f}")
 
@@ -604,13 +605,7 @@ class TradingBot:
         current_tp = pos.get("current_tp", 0)
         sl_price = pos.get("sl_price", 0)
 
-        tp_hit = sl_hit = False
-        if side == "buy":
-            tp_hit = current_tp > 0 and live_price >= current_tp
-            sl_hit = sl_price > 0 and live_price <= sl_price
-        elif side == "sell":
-            tp_hit = current_tp > 0 and live_price <= current_tp
-            sl_hit = sl_price > 0 and live_price >= sl_price
+        tp_hit, sl_hit = regles.tp_sl_franchi(side, live_price, current_tp, sl_price)
 
         if tp_hit or sl_hit:
             tag = "TP" if tp_hit else "SL"
@@ -644,12 +639,13 @@ class TradingBot:
     def _manage_trailing(self, coin, last_price):
         """Trailing profit + breakeven stop + trailing stop pour une paire.
 
-        MOTEUR CONSERVÉ (seule sortie performante de v8) — seul l'arrondi des
-        prix devient coin-agnostique (round_price_sig).
+        MOTEUR CONSERVÉ (seule sortie performante de v8). Les décisions
+        arithmétiques vivent dans trader/position_rules.py, où elles sont
+        testées sur les deux sens ; il ne reste ici que l'enchaînement et les
+        effets sur l'exchange.
         """
         pos = self.positions[coin]
-        entry = pos["entry"]
-        side = pos["side"]
+        entry, side = pos["entry"], pos["side"]
 
         # Garde-fou : si entry est manquant ou nul, on ne peut rien calculer
         if not entry or not side or not last_price:
@@ -658,106 +654,69 @@ class TradingBot:
         trail_dist = pos.get("trail_distance", TRAIL_PCT)
         trail_trig = pos.get("trail_trigger", TRAILING_TRIGGER_PCT)
         trail_step = pos.get("trail_step", TRAILING_STEP_PCT)
-
-        gain_pct = (last_price - entry) / entry if side == "buy" else (entry - last_price) / entry
+        gain = regles.gain_pct(entry, last_price, side)
 
         # --- Trailing Profit ---
-        best = pos.get("best_price") or entry  # fallback si best_price est None
-        initial_tp_dist = pos.get("initial_tp_dist", 0)
-
-        if side == "buy" and last_price > best:
+        if regles.est_nouveau_sommet(side, last_price, pos.get("best_price"), entry):
             pos["best_price"] = last_price
-            if initial_tp_dist > 0:
-                new_tp = last_price * (1 + initial_tp_dist * 0.5)
-                if new_tp > pos.get("current_tp", 0):
-                    new_tp_order = self.trader.update_tp(
-                        new_tp, old_tp_order_id=pos.get("tp_order_id")
-                    )
-                    if new_tp_order is not None:
-                        pos["current_tp"] = new_tp
-                        pos["tp_order_id"] = new_tp_order.get("id")
-                        print(f"[BOT][{coin}] 🎯 TP → {new_tp:.6g}")
-                    else:
-                        print(f"[BOT][{coin}] ⚠️ TP update ECHEC @ {new_tp:.6g}")
-
-        elif side == "sell" and last_price < best:
-            pos["best_price"] = last_price
-            if initial_tp_dist > 0:
-                new_tp = last_price * (1 - initial_tp_dist * 0.5)
-                if new_tp < pos.get("current_tp", float("inf")):
-                    new_tp_order = self.trader.update_tp(
-                        new_tp, old_tp_order_id=pos.get("tp_order_id")
-                    )
-                    if new_tp_order is not None:
-                        pos["current_tp"] = new_tp
-                        pos["tp_order_id"] = new_tp_order.get("id")
-                        print(f"[BOT][{coin}] 🎯 TP → {new_tp:.6g}")
-                    else:
-                        print(f"[BOT][{coin}] ⚠️ TP update ECHEC @ {new_tp:.6g}")
+            nouveau_tp = regles.tp_ratchet(side, last_price,
+                                           pos.get("initial_tp_dist", 0),
+                                           pos.get("current_tp"))
+            if nouveau_tp is not None:
+                ordre = self.trader.update_tp(
+                    nouveau_tp, old_tp_order_id=pos.get("tp_order_id"))
+                if ordre is not None:
+                    pos["current_tp"] = nouveau_tp
+                    pos["tp_order_id"] = ordre.get("id")
+                    print(f"[BOT][{coin}] 🎯 TP → {nouveau_tp:.6g}")
+                else:
+                    print(f"[BOT][{coin}] ⚠️ TP update ECHEC @ {nouveau_tp:.6g}")
 
         # --- Breakeven Stop ---
-        if not pos.get("breakeven_done", False) and gain_pct >= BREAKEVEN_TRIGGER_PCT:
-            breakeven_sl = round_price_sig(entry * (1 + BREAKEVEN_OFFSET_PCT)) if side == "buy" \
-                           else round_price_sig(entry * (1 - BREAKEVEN_OFFSET_PCT))
-            old_sl = pos.get("sl_price", 0)
-            is_better = (side == "buy" and breakeven_sl > old_sl) or \
-                        (side == "sell" and breakeven_sl < old_sl)
-            if is_better:
-                print(f"[BOT][{coin}] 🛡️ Breakeven @ {breakeven_sl:.6g} (gain: {gain_pct*100:.2f}%)")
-                new_sl_order = self.trader.update_sl(
-                    breakeven_sl,
-                    old_sl_order_id=pos.get("sl_order_id")
-                )
-                if new_sl_order is not None:
+        if not pos.get("breakeven_done", False) and gain >= BREAKEVEN_TRIGGER_PCT:
+            breakeven_sl = regles.niveau_breakeven(side, entry, BREAKEVEN_OFFSET_PCT)
+            if regles.breakeven_ameliore(side, breakeven_sl, pos.get("sl_price", 0)):
+                print(f"[BOT][{coin}] 🛡️ Breakeven @ {breakeven_sl:.6g} (gain: {gain*100:.2f}%)")
+                ordre = self.trader.update_sl(
+                    breakeven_sl, old_sl_order_id=pos.get("sl_order_id"))
+                if ordre is not None:
                     # Confirmer seulement si l'exchange a bien placé le nouvel ordre
                     pos["sl_price"] = breakeven_sl
-                    pos["sl_order_id"] = new_sl_order.get("id")
+                    pos["sl_order_id"] = ordre.get("id")
                     pos["breakeven_done"] = True
                 else:
                     print(f"[BOT][{coin}] ⚠️ Breakeven SL ECHEC — sera retenté au prochain cycle")
 
         # --- Trailing Stop ---
-        if not pos["trailing_active"] and gain_pct >= trail_trig:
-            pos["trailing"] = last_price * (1 - trail_dist) if side == "buy" \
-                              else last_price * (1 + trail_dist)
+        if not pos["trailing_active"] and gain >= trail_trig:
+            pos["trailing"] = regles.niveau_trailing(side, last_price, trail_dist)
             pos["trailing_active"] = True
             print(f"[BOT][{coin}] 📈 Trailing activé @ {pos['trailing']:.6g} "
-                  f"(gain: {gain_pct*100:.2f}%)")
+                  f"(gain: {gain*100:.2f}%)")
 
         if pos["trailing_active"]:
-            trailing = pos["trailing"]
-            if side == "buy":
-                new_trailing = last_price * (1 - trail_dist)
-                if new_trailing > trailing + (entry * trail_step):
-                    pos["trailing"] = new_trailing
-                    print(f"[BOT][{coin}] 📈 Trailing → {new_trailing:.6g}")
-                elif last_price <= trailing:
-                    print(f"[BOT][{coin}] 🔔 Trailing touché ({last_price:.6g} <= {trailing:.6g})")
-                    result = self.trader.close_position(
-                        reason="trailing_stop", context=self._position_context(coin))
-                    if result:
-                        self.risk.register_trade_result(result["pnl"])
-                        guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
-                    self._last_trade_times[coin] = time.time()
-                    self.positions[coin] = self._empty_position()
-            elif side == "sell":
-                new_trailing = last_price * (1 + trail_dist)
-                if new_trailing < trailing - (entry * trail_step):
-                    pos["trailing"] = new_trailing
-                    print(f"[BOT][{coin}] 📉 Trailing → {new_trailing:.6g}")
-                elif last_price >= trailing:
-                    print(f"[BOT][{coin}] 🔔 Trailing touché ({last_price:.6g} >= {trailing:.6g})")
-                    result = self.trader.close_position(
-                        reason="trailing_stop", context=self._position_context(coin))
-                    if result:
-                        self.risk.register_trade_result(result["pnl"])
-                        guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
-                    self._last_trade_times[coin] = time.time()
-                    self.positions[coin] = self._empty_position()
+            candidat = regles.niveau_trailing(side, last_price, trail_dist)
+            # `elif` volontaire : un cycle qui fait monter le stop ne peut pas
+            # aussi le déclencher — comportement d'origine.
+            if regles.trailing_doit_monter(side, candidat, pos["trailing"], entry, trail_step):
+                pos["trailing"] = candidat
+                fleche = "📈" if side == "buy" else "📉"
+                print(f"[BOT][{coin}] {fleche} Trailing → {candidat:.6g}")
+            elif regles.trailing_touche(side, last_price, pos["trailing"]):
+                comparaison = "<=" if side == "buy" else ">="
+                print(f"[BOT][{coin}] 🔔 Trailing touché "
+                      f"({last_price:.6g} {comparaison} {pos['trailing']:.6g})")
+                self._fermer_sur_trailing(coin)
 
-    # ──────────────────────────────────────────────────────────
-    # Rapport journalier & Auto-calibration
-    # ──────────────────────────────────────────────────────────
+    def _fermer_sur_trailing(self, coin):
+        """Ferme la position sur déclenchement du stop suiveur."""
+        result = self.trader.close_position(
+            reason="trailing_stop", context=self._position_context(coin))
+        if result:
+            self.risk.register_trade_result(result["pnl"])
+            guards.adjust_cooldown(self._cooldowns, coin, result["pnl"])
+        self._last_trade_times[coin] = time.time()
+        self.positions[coin] = self._empty_position()
 
     def _check_mongo_health(self) -> bool:
         """Vérifie que MongoDB est joignable au démarrage (3 tentatives)."""
