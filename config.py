@@ -176,6 +176,12 @@ PARQUET_DIR = os.getenv("PARQUET_DIR", os.path.join(DATA_DIR, "parquet"))
 HYPERLIQUID_API_KEY = os.getenv("HYPERLIQUID_API_KEY", "")
 HYPERLIQUID_API_SECRET = os.getenv("HYPERLIQUID_API_SECRET", "")
 
+# Adresse publique du compte maître Hyperliquid. Ce n'est PAS un secret : elle
+# sert au watchdog externe pour interroger l'endpoint public extraAgents et
+# surveiller l'expiration des API wallets. Par défaut, celle du bot.
+HL_WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS", HYPERLIQUID_API_KEY)
+AGENT_EXPIRY_ALERT_DAYS = 30   # alerte quand un agent expire dans moins de N jours
+
 # === DEBUG ===
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 

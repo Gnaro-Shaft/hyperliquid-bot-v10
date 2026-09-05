@@ -22,8 +22,9 @@ from pymongo import MongoClient
 
 from config import (
     MONGO_URL, MONGO_DB, MONGO_COLLECTION_HEARTBEATS, MONGO_COLLECTION_BOT_STATUS,
-    COLLECTOR_SILENT_ALERT_SEC,
+    COLLECTOR_SILENT_ALERT_SEC, HL_WALLET_ADDRESS, AGENT_EXPIRY_ALERT_DAYS,
 )
+from utils import http
 from collector.heartbeat import read_heartbeats, stale_heartbeats
 from utils.notifier import Notifier
 
@@ -49,6 +50,50 @@ def check(db, max_age_s, bot_status_max_age_s=600):
             problems.append(f"bot_status périmé ({int(age_s)}s) — process bot mort ?")
 
     return problems
+
+
+API_INFO_URL = "https://api.hyperliquid.xyz/info"
+
+
+def agents_expirants(agents, now_ms, seuil_jours=AGENT_EXPIRY_ALERT_DAYS):
+    """Agents Hyperliquid dont l'approbation expire bientôt (ou a expiré).
+
+    Un API wallet expiré ne peut plus signer d'ordre : le bot continue de
+    collecter et d'évaluer, mais ses entrées sont rejetées par l'exchange —
+    une panne parfaitement silencieuse pour les heartbeats.
+    """
+    problemes = []
+    for agent in agents or []:
+        valid_until = agent.get("validUntil")
+        if valid_until is None:
+            continue
+        restant_j = (int(valid_until) - now_ms) / 86_400_000
+        nom = agent.get("name") or "sans nom"
+        if restant_j <= 0:
+            problemes.append(f"agent Hyperliquid « {nom} » EXPIRÉ depuis {abs(restant_j):.0f} j")
+        elif restant_j <= seuil_jours:
+            problemes.append(f"agent Hyperliquid « {nom} » expire dans {restant_j:.0f} j")
+    return problemes
+
+
+def check_agents(now_ms, session=None):
+    """Interroge l'endpoint PUBLIC extraAgents. Ne signe rien, n'utilise aucune
+    clé privée — seule l'adresse publique du compte maître est nécessaire.
+
+    Une panne réseau ne doit pas réveiller qui que ce soit : elle est
+    journalisée et ignorée. Le watchdog surveille la collecte, pas Hyperliquid.
+    """
+    if not HL_WALLET_ADDRESS:
+        return []
+    try:
+        session = session or http.creer_session()
+        resp = http.demander(session, "POST", API_INFO_URL,
+                             json={"type": "extraAgents", "user": HL_WALLET_ADDRESS},
+                             timeout=10, tentatives=2)
+        return agents_expirants(resp.json(), now_ms)
+    except Exception as e:
+        print(f"[WATCHDOG] contrôle des agents indisponible ({e}) — ignoré")
+        return []
 
 
 def _load_state():
@@ -89,9 +134,15 @@ def main():
         problems = [f"MongoDB injoignable: {e}"]
         db = None
 
+    problems += check_agents(int(time.time() * 1000))
+
     if problems:
         print(f"[WATCHDOG] ⚠️ {problems}")
-        if not state.get("unhealthy") or args.force_alert:
+        # Anti-spam sur le CONTENU, pas sur un simple booléen : un problème
+        # durable (agent qui expire dans 14 jours) maintiendrait sinon l'état
+        # « unhealthy » et étoufferait l'alerte d'une panne survenant après.
+        nouveaux = [p for p in problems if p not in set(state.get("problems", []))]
+        if nouveaux or args.force_alert:
             notifier.error("🛰️ <b>WATCHDOG EXTERNE — collecte en panne</b>\n- "
                            + "\n- ".join(problems))
         _save_state({"unhealthy": True, "problems": problems, "ts": time.time()})
