@@ -1,0 +1,17 @@
+# Export Mongo → Parquet. Déclenché par v10-export.timer.
+[Unit]
+Description=Export Parquet V10 (archive de référence)
+After=network-online.target
+OnFailure=v10-alert@%n.service
+
+[Service]
+Type=oneshot
+User=botv10
+Group=botv10
+WorkingDirectory=/opt/v10
+EnvironmentFile=/opt/v10/.env
+ExecStart=/opt/v10/venv/bin/python -m scripts.export_parquet --days 3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/v10/data
+SyslogIdentifier=v10-export

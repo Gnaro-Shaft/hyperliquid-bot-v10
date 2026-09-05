@@ -1,0 +1,44 @@
+# Bot V10 — collecte + moteur de signaux.
+# Installation : voir docs/DEPLOIEMENT-VPS.md
+[Unit]
+Description=Bot Hyperliquid V10 (collecte + moteur)
+Documentation=file:/opt/v10/docs/DEPLOIEMENT-VPS.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=v10-alert@%n.service
+
+[Service]
+Type=simple
+User=botv10
+Group=botv10
+WorkingDirectory=/opt/v10
+EnvironmentFile=/opt/v10/.env
+ExecStart=/opt/v10/venv/bin/python -u main.py
+
+# Redémarrage : ce qui a manqué sur Fly, où max_retries=0 a fait abandonner
+# l'orchestrateur après deux OOM successifs (22/08/2026).
+Restart=always
+RestartSec=30
+
+# Confinement mémoire. Empreinte mesurée : ~121 Mo chargé, ~350 Mo en régime.
+# MemoryHigh met sous pression avant le couperet ; MemoryMax borne la casse et
+# transforme une fuite en redémarrage tracé au lieu d'un OOM système.
+MemoryHigh=600M
+MemoryMax=1G
+
+# Durcissement
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/v10/data
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=v10
+
+[Install]
+WantedBy=multi-user.target

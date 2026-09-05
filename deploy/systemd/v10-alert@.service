@@ -1,0 +1,12 @@
+# Alerte Telegram déclenchée par OnFailure= d'une autre unité.
+# %i = nom de l'unité en échec (ex. v10-bot.service).
+[Unit]
+Description=Alerte Telegram — échec de %i
+
+[Service]
+Type=oneshot
+User=botv10
+Group=botv10
+WorkingDirectory=/opt/v10
+EnvironmentFile=/opt/v10/.env
+ExecStart=/opt/v10/venv/bin/python -m scripts.notify_failure %i
