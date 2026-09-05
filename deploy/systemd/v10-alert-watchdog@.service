@@ -1,0 +1,14 @@
+# Alerte Telegram quand le WATCHDOG lui-même échoue.
+# Variante de v10-alert@.service aux chemins de la machine de surveillance :
+# si le surveillant tombe, plus personne ne signale rien — il faut donc que sa
+# propre panne parle.
+[Unit]
+Description=Alerte Telegram — échec de %i
+
+[Service]
+Type=oneshot
+User=v10watch
+Group=v10watch
+WorkingDirectory=/opt/v10-watchdog
+EnvironmentFile=/opt/v10-watchdog/.env
+ExecStart=/opt/v10-watchdog/venv/bin/python -m scripts.notify_failure %i

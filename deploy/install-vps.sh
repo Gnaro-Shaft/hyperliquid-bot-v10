@@ -15,6 +15,18 @@ UNITS_DIR="$APP_DIR/deploy/systemd"
 
 [[ $EUID -eq 0 ]] || { echo "À lancer en root (sudo)."; exit 1; }
 
+# Exécution en tant qu'utilisateur applicatif. `runuser` (util-linux) est présent
+# partout et n'exige pas sudo — absent des images minimales type Proxmox, où tout
+# se fait en root de toute façon. Repli sur sudo si runuser manquait.
+as_app() {
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$APP_USER" -- "$@"
+    else
+        sudo -u "$APP_USER" "$@"
+    fi
+}
+
+
 echo "── Paquets système ──"
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -51,17 +63,17 @@ mkdir -p "$APP_DIR/data/parquet"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 echo "── Environnement Python ──"
-sudo -u "$APP_USER" python3 -m venv "$APP_DIR/venv"
-sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install -q --upgrade pip
-sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
-sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" check
+as_app python3 -m venv "$APP_DIR/venv"
+as_app "$APP_DIR/venv/bin/pip" install -q --upgrade pip
+as_app "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
+as_app "$APP_DIR/venv/bin/pip" check
 
 echo "── Vérification (suite de tests sur la machine cible) ──"
 # MONGO_URL neutralisé : la suite ouvre sinon un vrai client vers Atlas et y
 # insère de faux trades (TradeLogger crée son propre client quand db is None).
 # Les tests passent sans Mongo — c'est aussi ce qui les rend hermétiques.
 cd "$APP_DIR"
-sudo -u "$APP_USER" env MONGO_URL= "$APP_DIR/venv/bin/python" -m pytest tests/ -q
+as_app env MONGO_URL= "$APP_DIR/venv/bin/python" -m pytest tests/ -q
 
 echo "── Unités systemd ──"
 install -m 644 "$UNITS_DIR"/v10-bot.service     /etc/systemd/system/

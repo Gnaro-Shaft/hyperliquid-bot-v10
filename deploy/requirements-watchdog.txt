@@ -1,0 +1,20 @@
+# Watchdog externe — sous-ensemble minimal de requirements.txt.
+#
+# Le watchdog ne lit que collector_health et bot_status, puis notifie sur
+# Telegram : ni pandas ni numpy, donc pas de contrainte Python >= 3.12. Il
+# tourne ainsi sur une machine de surveillance quelconque, distincte de celle
+# qui héberge le bot — c'est tout son intérêt.
+#
+# Versions identiques à requirements.txt : une divergence de pymongo entre le
+# producteur et le surveillant serait une mauvaise surprise le jour d'une panne.
+
+pymongo==4.17.0
+dnspython==2.8.0
+requests==2.34.2
+python-dotenv==1.2.2
+
+# Transitifs
+certifi==2026.6.17
+charset-normalizer==3.4.7
+idna==3.18
+urllib3==2.7.0

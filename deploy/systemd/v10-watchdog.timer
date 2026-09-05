@@ -1,0 +1,10 @@
+[Unit]
+Description=Watchdog externe V10 — toutes les 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

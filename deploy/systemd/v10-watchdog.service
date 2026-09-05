@@ -1,0 +1,30 @@
+# Watchdog externe V10 — déclenché par v10-watchdog.timer.
+# À installer sur une machine DISTINCTE de celle qui héberge le bot : il doit
+# survivre à la mort du bot, et surtout à celle de sa machine.
+[Unit]
+Description=Watchdog externe V10 (collecte muette ⇒ alerte Telegram)
+Documentation=file:/opt/v10-watchdog/docs/DEPLOIEMENT-VPS.md
+After=network-online.target
+Wants=network-online.target
+OnFailure=v10-alert-watchdog@%n.service
+
+[Service]
+Type=oneshot
+User=v10watch
+Group=v10watch
+WorkingDirectory=/opt/v10-watchdog
+EnvironmentFile=/opt/v10-watchdog/.env
+ExecStart=/opt/v10-watchdog/venv/bin/python -m scripts.external_watchdog
+
+# Le script mémorise son dernier état pour n'alerter que sur transition.
+ReadWritePaths=/opt/v10-watchdog/scripts
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+SyslogIdentifier=v10-watchdog
+
+# Le code de sortie 1 signale « collecte en panne », pas un échec du watchdog :
+# sans ceci, systemd le marquerait failed et OnFailure= partirait en double.
+SuccessExitStatus=0 1

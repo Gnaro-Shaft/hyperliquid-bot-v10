@@ -103,3 +103,39 @@ rsync -an --checksum ...   # vérification : aucune ligne = copies identiques
   documentée. `requirements.txt` est désormais épinglé au transitif près, sur la
   résolution de juillet — sauf `pandas`, en 3.0.5 et non 3.0.4, cette dernière
   ayant été retirée de PyPI pour des segfaults datetime.
+
+## Watchdog externe — homeserv03
+
+Installé le 05/09/2026 sur **homeserv03** (adresse tailnet, hors dépôt), délibérément pas sur le
+VPS : il doit survivre à la mort du bot **et à celle de sa machine**. Le 22/08/2026
+il vivait sur homeserv01, retirée du tailnet le jour même — la collecte est restée
+morte 14 jours sans que personne ne soit prévenu.
+
+```bash
+rsync -az --exclude 'venv/' --exclude '.git/' --exclude 'data/' --exclude '.env' \
+  ~/projects/20-prod/V10/ root@homeserv03:/opt/v10-watchdog/
+# .env RÉDUIT : MONGO_URL, MONGO_DB, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID — jamais les clés HL
+bash /opt/v10-watchdog/deploy/install-watchdog.sh
+```
+
+| Unité | Rôle |
+|---|---|
+| `v10-watchdog.timer` | toutes les 5 min, `Persistent=true`, `OnBootSec=2min` |
+| `v10-watchdog.service` | lit `collector_health` + `bot_status`, alerte sur transition |
+| `v10-alert-watchdog@.service` | alerte si le watchdog **lui-même** échoue |
+
+Surface minimale : `deploy/requirements-watchdog.txt` n'installe que pymongo,
+dnspython, requests et python-dotenv — ni numpy ni pandas, donc aucune contrainte
+Python 3.12 sur la machine de surveillance (homeserv03 est en 3.13).
+
+`SuccessExitStatus=0 1` : le code 1 signifie « collecte en panne », pas « watchdog
+en échec ». Sans lui, systemd déclencherait `OnFailure=` et tu recevrais deux
+Telegram pour un seul incident.
+
+Test de la chaîne, sans attendre une vraie panne :
+
+```bash
+# branche panne (envoie une vraie alerte, puis rejouer sans l'option pour le rétabli)
+runuser -u v10watch -- /opt/v10-watchdog/venv/bin/python -m scripts.external_watchdog --max-age 0
+runuser -u v10watch -- /opt/v10-watchdog/venv/bin/python -m scripts.external_watchdog
+```
