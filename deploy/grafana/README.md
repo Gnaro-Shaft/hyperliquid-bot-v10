@@ -1,6 +1,6 @@
 # Grafana V10 — déploiement
 
-Hébergé sur **`docker-stack`** (tailnet `100.126.56.110`) depuis le 05/09/2026.
+Hébergé sur **`docker-stack`** (adresse tailnet, hors dépôt) depuis le 05/09/2026.
 L'hôte d'origine, homeserv01, a disparu lors de la migration Proxmox du 22/08 —
 Grafana est parti avec, comme le watchdog et les crons.
 
@@ -10,21 +10,21 @@ Docker et il n'y reste que ~550 Mio de RAM libre, et le VPS OVH héberge le bot
 
 ## Accès
 
-`http://100.126.56.110:3002` — **sur le tailnet uniquement**. Le port est publié
+`http://<ip-tailnet-docker-stack>:3002` — **sur le tailnet uniquement**. Le port est publié
 sur l'IP tailnet, jamais sur `0.0.0.0` (convention docker-stack). Le défaut de
 `GRAFANA_BIND_IP` est `127.0.0.1` : sans variable, rien n'est exposé.
 
 ## Installation
 
 ```bash
-ssh root@100.126.56.110
+ssh root@docker-stack
 mkdir -p /opt/v10-grafana && cd /opt/v10-grafana
 # copier docker-compose.yml et dashboard-v10.json depuis deploy/grafana/
 cat > .env <<'EOF'
 MONGO_URL=...
 MONGO_DB=bot_hyperliquid_v10
 GRAFANA_ADMIN_PASSWORD=...
-GRAFANA_BIND_IP=100.126.56.110
+GRAFANA_BIND_IP=<ip-tailnet-docker-stack>
 EOF
 chmod 600 .env
 docker compose --env-file .env up -d
