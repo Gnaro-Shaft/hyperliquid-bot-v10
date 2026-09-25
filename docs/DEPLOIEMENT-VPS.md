@@ -9,12 +9,12 @@ Remplace le déploiement Fly.io, arrêté le 22/08/2026 (OOM sur 512 Mo, voir
 |---|---|---|
 | VPS OVH (Ubuntu 24.04) | bot + collectors, export Parquet | uptime, IP fixe, 4 Go |
 | homeserv03 | **watchdog externe** | doit survivre à la mort du VPS |
-| homeserv02 | copie de l'archive Parquet | `/data/backups/V10-archive` |
+| homeserv03 | copie de l'archive Parquet | `/var/backups/v10-archive` |
 | MongoDB Atlas M0 | buffer roulant (pas l'archive) | inchangé |
 
 L'archive de référence est le **Parquet**, pas Mongo : la purge vide les six
 collections volumineuses dès qu'un jour est archivé. Perdre le Parquet, c'est
-perdre le dataset — d'où la copie sur homeserv02.
+perdre le dataset — d'où la copie sur homeserv03.
 
 ## Prérequis
 
@@ -114,27 +114,33 @@ le VPS il mourrait avec le bot — c'est exactement ce qui s'est produit le
 22/08/2026, où le watchdog vivait sur homeserv01, machine retirée du tailnet le
 jour même.
 
-## Sauvegarde de l'archive — homeserv02 TIRE, le VPS ne pousse pas
+## Sauvegarde de l'archive — homeserv03 TIRE, le VPS ne pousse pas
 
 Le sens du lien suit l'exposition des machines. Le VPS écoute sur Internet ; lui
-donner une clé vers homeserv02 ferait d'une compromission du VPS un accès aux
-sauvegardes de tous les projets. À l'inverse, homeserv02 tire avec une clé
+donner une clé vers la maison ferait d'une compromission du VPS un accès aux
+sauvegardes de tous les projets. À l'inverse, homeserv03 tire avec une clé
 **verrouillée côté VPS** :
 
 ```
 command="/usr/bin/rrsync -ro /opt/v10/data/parquet",restrict ssh-ed25519 AAAA...
 ```
 
-Une compromission de homeserv02 ne donne alors qu'une lecture seule du
+Une compromission de homeserv03 ne donne alors qu'une lecture seule du
 répertoire d'archive — jamais le `.env`, jamais les clés de trading.
 
 Utilisateur dédié `v10archive` sur le VPS (système, sans sudo). Clé dédiée
-`/root/.ssh/v10_archive` sur homeserv02, révocable indépendamment de `id_rsa`.
+`/root/.ssh/v10_archive` sur homeserv03, révocable indépendamment des autres.
 
-Unités : `v10-archive-pull.service` + `.timer`, **sur homeserv02**, à 03:10 UTC —
-après l'export du VPS (02:20) et la purge qui le suit. **Pas de `--delete`** :
-la sauvegarde accumule et met à jour, une suppression accidentelle côté VPS ne
-se propage pas.
+Unités : `v10-archive-pull.service` + `.timer`, **sur homeserv03**, à 03:10 UTC —
+après l'export du VPS (02:20) et la purge qui le suit. Destination
+`/var/backups/v10-archive`, hors de `/var/lib/vz` : Proxmox pourrait élaguer ce
+qu'il prend pour son stockage `local`. **Pas de `--delete`** : la sauvegarde
+accumule et met à jour, une suppression accidentelle côté VPS ne se propage pas.
+
+**Jusqu'au 16/09/2026, elle vivait sur homeserv02.** Son disque a lâché ce
+jour-là, et avec lui l'unique copie de l'archive. Le watchdog a écrit
+« contrôle de la sauvegarde indisponible — ignoré » 2 444 fois en neuf jours
+sans que personne ne soit prévenu ; déplacée sur homeserv03 le 25/09/2026.
 
 ### Vérification du verrouillage
 
@@ -156,19 +162,27 @@ battent, et l'unique copie hors du VPS vieillit sans que personne ne le sache.
 Détecter ce cas exige un observateur **externe** — si homeserv02 s'éteint, elle
 ne peut pas signaler sa propre panne.
 
-C'est donc le watchdog de homeserv03 qui contrôle, toutes les 5 minutes :
+Le watchdog contrôle, toutes les 5 minutes :
 
 1. `v10-archive-pull.service` écrit un marqueur horodaté après chaque
    sauvegarde réussie (`ExecStartPost`) ;
-2. homeserv03 le lit par SSH avec une clé verrouillée sur un unique
-   `cat` (`command="cat …/.derniere_sauvegarde",restrict`) ;
+2. le watchdog le lit **localement** — les deux tournent sur homeserv03 —
+   au chemin donné par `BACKUP_MARKER` dans son `.env` ;
 3. au-delà de **48 h** — deux passages nocturnes manqués — l'alerte part.
 
-`BACKUP_CHECK_HOST` et `BACKUP_CHECK_KEY` vivent dans le `.env` de homeserv03,
-jamais dans le dépôt. Vide = contrôle désactivé.
+**Un marqueur qu'on ne peut pas lire est une alerte** : absent, vide, illisible
+ou daté dans le futur. Avant le 25/09/2026, une lecture impossible était
+« journalisée et ignorée » — c'est ce qui a rendu la perte de homeserv02
+invisible. `BACKUP_MARKER` vide désactive le contrôle, et le watchdog l'écrit à
+chaque passage.
 
-Une liaison SSH coupée est journalisée et ignorée : le watchdog surveille la
-collecte, pas le réseau local.
+Un échec de `v10-archive-pull` alerte aussi tout de suite, par `OnFailure=`,
+sans attendre les 48 h.
+
+**La limite, assumée** : copie et watchdog partagent désormais la même machine.
+Si homeserv03 meurt, la sauvegarde s'arrête et le watchdog avec — la même panne
+fait taire les deux. Le watchdog lui-même n'a pas d'observateur externe ; ce
+n'est pas nouveau, mais la sauvegarde en dépend maintenant.
 
 **Éprouvé le 05/09/2026** : marqueur vieilli artificiellement de 72 h → détecté
 (« sauvegarde de l'archive vieille de 72 h (seuil 48 h) ») ; marqueur restauré →

@@ -15,7 +15,6 @@ Cron suggéré (toutes les 5 min) :
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 
@@ -24,7 +23,7 @@ from pymongo import MongoClient
 from config import (
     MONGO_URL, MONGO_DB, MONGO_COLLECTION_HEARTBEATS, MONGO_COLLECTION_BOT_STATUS,
     COLLECTOR_SILENT_ALERT_SEC, HL_WALLET_ADDRESS, AGENT_EXPIRY_ALERT_DAYS,
-    BACKUP_CHECK_HOST, BACKUP_CHECK_KEY, BACKUP_MAX_AGE_HOURS,
+    BACKUP_MARKER, BACKUP_MAX_AGE_HOURS,
 )
 from utils import http
 from collector.heartbeat import read_heartbeats, stale_heartbeats
@@ -106,38 +105,43 @@ def sauvegarde_perimee(marqueur_epoch, now_ms, seuil_h=BACKUP_MAX_AGE_HOURS):
     la collecte continue, les heartbeats battent, et l'unique copie hors du VPS
     vieillit sans que personne ne le sache.
     """
-    if marqueur_epoch is None:
-        return None
     age_h = (now_ms / 1000 - marqueur_epoch) / 3600
+    if age_h < -5 / 60:
+        # Une horloge fausse rendrait le contrôle muet pour toujours.
+        return "marqueur de sauvegarde daté dans le futur — horloge fausse ?"
     if age_h > seuil_h:
         return f"sauvegarde de l'archive vieille de {age_h:.0f} h (seuil {seuil_h} h)"
     return None
 
 
-def check_sauvegarde(now_ms):
-    """Lit le marqueur horodaté sur la machine de sauvegarde.
+def check_sauvegarde(now_ms, chemin=None):
+    """Lit le marqueur horodaté écrit par v10-archive-pull sur cette machine.
 
-    La clé SSH utilisée est verrouillée côté hôte distant sur un unique `cat` :
-    elle ne peut rien faire d'autre. Une panne de liaison est journalisée et
-    ignorée — le watchdog surveille la collecte, pas le réseau local.
+    Un marqueur qu'on ne peut pas lire est une ALERTE. Jusqu'au 25/09/2026 il
+    était « journalisé et ignoré » : homeserv02, qui portait la sauvegarde, est
+    mort le 16/09 et le watchdog a écrit « ignoré » 2 444 fois en neuf jours —
+    l'archive n'avait plus aucune copie et personne ne l'a su. Un contrôle qui
+    ne peut pas conclure ne conclut pas que tout va bien.
+
+    Le message ne porte que le type d'erreur, jamais un détail variable :
+    l'anti-spam compare les contenus, un texte changeant réalerterait à chaque
+    passage.
     """
-    if not BACKUP_CHECK_HOST or not BACKUP_CHECK_KEY:
+    chemin = BACKUP_MARKER if chemin is None else chemin
+    if not chemin:
+        print("[WATCHDOG] contrôle de la sauvegarde désactivé (BACKUP_MARKER vide)")
         return []
     try:
-        sortie = subprocess.run(
-            ["ssh", "-i", BACKUP_CHECK_KEY, "-o", "BatchMode=yes",
-             "-o", "StrictHostKeyChecking=accept-new",
-             "-o", "ConnectTimeout=10", BACKUP_CHECK_HOST, "true"],
-            capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
-        if sortie.returncode != 0 or not sortie.stdout.strip():
-            # Remonter stderr : sans lui, un refus de clé d'hôte se présente
-            # comme un banal « invalid literal for int() » et coûte du temps.
-            detail = (sortie.stderr or "").strip().splitlines()
-            raise RuntimeError(detail[-1] if detail else f"code {sortie.returncode}, sortie vide")
-        marqueur = int(sortie.stdout.strip())
+        with open(chemin) as f:
+            brut = f.read().strip()
+        # int() accepte les chiffres de toute écriture Unicode : « １７９… »
+        # passerait pour une date. `date +%s` n'écrit que de l'ASCII.
+        if not (brut.isascii() and brut.isdigit()):
+            raise ValueError("pas un entier ASCII")
+        marqueur = int(brut)
     except Exception as e:
-        print(f"[WATCHDOG] contrôle de la sauvegarde indisponible ({e}) — ignoré")
-        return []
+        return [f"sauvegarde de l'archive incontrôlable : marqueur illisible "
+                f"({type(e).__name__})"]
     probleme = sauvegarde_perimee(marqueur, now_ms)
     return [probleme] if probleme else []
 

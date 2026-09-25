@@ -1,5 +1,6 @@
-# Sauvegarde de l'archive Parquet — à installer sur la machine de SAUVEGARDE
-# (homeserv02), pas sur le VPS.
+# Sauvegarde de l'archive Parquet — à installer sur homeserv03, à côté du
+# watchdog externe, pas sur le VPS. (Elle vivait sur homeserv02, mort le
+# 16/09/2026 avec la seule copie de l'archive.)
 #
 # C'est la sauvegarde qui TIRE, jamais le VPS qui pousse : le VPS est la machine
 # exposée à Internet. Une compromission de la sauvegarde ne donne alors qu'un
@@ -13,16 +14,26 @@
 Description=Sauvegarde de l'archive Parquet V10 depuis le VPS
 After=network-online.target
 Wants=network-online.target
+# L'alerte immédiate d'un échec, sans attendre les 48 h du contrôle de fraîcheur.
+OnFailure=v10-alert-watchdog@%n.service
 
 [Service]
 Type=oneshot
 # L'adresse du VPS vit hors du dépôt : /etc/default/v10-archive-pull
 # contient VPS_HOST=<ip ou nom d'hôte>.
 EnvironmentFile=/etc/default/v10-archive-pull
-ExecStart=/usr/bin/rsync -a --info=stats1 \
+# Hors de /var/lib/vz : Proxmox tiendrait le répertoire pour son stockage
+# `local` et pourrait l'élaguer. Le répertoire doit rester lisible : le
+# watchdog, sous v10watch, y lit le marqueur. (Inutile de restreindre parquet/ :
+# rsync -a lui rend les droits de la source au premier passage.)
+ExecStartPre=/bin/mkdir -p /var/backups/v10-archive/parquet
+# --no-owner --no-group : botv10 n'existe pas ici, et son UID (999) y est celui
+# de v10watch — rsync -a lui confiait l'archive. Constaté au premier passage,
+# le 25/09/2026. Tout appartient à root.
+ExecStart=/usr/bin/rsync -a --no-owner --no-group --info=stats1 \
     -e "ssh -i /root/.ssh/v10_archive -o BatchMode=yes -o ConnectTimeout=20" \
-    v10archive@${VPS_HOST}:/ /data/backups/V10-archive/parquet/
-# Marqueur horodaté : c'est lui que le watchdog externe interroge pour
-# détecter une sauvegarde qui aurait cessé sans bruit.
-ExecStartPost=/bin/sh -c 'date +%%s > /data/backups/V10-archive/.derniere_sauvegarde'
+    v10archive@${VPS_HOST}:/ /var/backups/v10-archive/parquet/
+# Marqueur horodaté, lu par le watchdog (BACKUP_MARKER). ExecStartPost ne
+# s'exécute que si rsync a réussi : le marqueur ne ment pas.
+ExecStartPost=/bin/sh -c 'date +%%s > /var/backups/v10-archive/.derniere_sauvegarde'
 SyslogIdentifier=v10-archive-pull
