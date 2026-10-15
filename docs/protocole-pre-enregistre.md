@@ -203,8 +203,18 @@ on invente une quatrième hypothèse pour ne pas conclure.
 | Date | Événement | Commit |
 |---|---|---|
 | 05/09/2026 19:30 UTC | Protocole rédigé. Jeu A clos, contaminé. | `e0e958d` |
-| — | Déploiement de la géométrie corrigée → **ouverture du jeu C** | *à remplir* |
+| 05/09/2026 20:00:58 UTC | Géométrie ×5 (`8206c7d`) déployée → **ouverture du jeu C**. Consignée le 15/10/2026 : écart déclaré ci-dessous. | `08c8047` |
 | — | H1 mesurée | *à remplir* |
 
 Toute ligne ajoutée à ce tableau l'est par un commit distinct, à la date de
 l'événement. Une ligne rétro-datée invalide le protocole.
+
+**Écart déclaré — 15/10/2026.** La ligne d'ouverture du jeu C aurait dû être
+consignée le jour du déploiement ; elle l'est avec 40 jours de retard. Ce n'est
+pas une rétro-datation : le commit porte sa vraie date, et l'écart est écrit
+ici. La date d'ouverture n'a pas été choisie après coup : le §2 la fixe au
+déploiement, attesté par le journal systemd du VPS (redémarrage de `v10-bot`).
+Vérifié le 15/10/2026 : le code déployé est identique, fichier par fichier, à
+`08c8047` ; le `.env` n'a pas été modifié depuis le 05/09 ; aucun redémarrage
+ultérieur n'a changé le code ni la configuration. Personne n'a lu les données
+du jeu C avant cette consignation.
