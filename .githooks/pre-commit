@@ -9,7 +9,11 @@
 #
 # Le contrôle de taille n'est pas rétroactif : un fichier déjà hors limite reste
 # commitable tant qu'il ne grandit pas. Un fichier renommé est jugé comme les
-# autres, et sa croissance se mesure par rapport à son ancien nom.
+# autres, et sa croissance se mesure par rapport à son ancien nom. Un changement
+# de type (lien remplacé par un fichier, ou l'inverse) est jugé lui aussi.
+#
+# Un lien symbolique ou un sous-module ne passe que les règles 1 et 2 : son
+# « contenu » est un chemin ou un identifiant de commit, pas du code.
 #
 # Écrit pour le bash 3.2 de macOS autant que pour un bash récent : une
 # application graphique qui lance git n'a pas forcément Homebrew dans son PATH.
@@ -39,12 +43,23 @@ fi
 # des depots dont le code parle francais. Restent hors de portee : un nom
 # contenant un saut de ligne ou une tabulation.
 #
-# Pour un renommage, git rend « R<score> NUL ancien NUL nouveau » : le nouveau
+# Le T de --diff-filter (changement de type) fermait un trou du meme ordre : un
+# lien `.env` vers un modele, remplace par un vrai `.env`, passait sans bruit.
+#
+# --raw donne, avant chaque chemin, « :ancien_mode nouveau_mode sha sha statut ».
+# Pour un renommage suivent deux chemins, « ancien NUL nouveau » : le nouveau
 # nom va aux regles, la paire « nouveau TAB ancien » sert a la regle 3.
+# Le nouveau mode trie les chemins : tous vont aux regles 1 et 2 (`staged`),
+# seuls les fichiers ordinaires aux regles 3 et 4 (`contenu`). Lire comme du
+# code la cible d'un lien faisait refuser par ruff un lien `.py` parfaitement sain.
 staged=""
+contenu=""
 renommes=""
-while IFS= read -r -d '' statut; do
+while IFS= read -r -d '' meta; do
   IFS= read -r -d '' f
+  statut=${meta##* }
+  reste=${meta#* }
+  mode=${reste%% *}
   case "$statut" in
     R*)
       IFS= read -r -d '' nouveau
@@ -53,8 +68,12 @@ while IFS= read -r -d '' statut; do
       ;;
   esac
   staged+="$f"$'\n'
-done < <(git diff --cached --name-status -z -M --diff-filter=ACMR)
+  case "$mode" in
+    100644|100755) contenu+="$f"$'\n' ;;
+  esac
+done < <(git diff --cached --raw -z -M --diff-filter=ACMRT)
 staged=${staged%$'\n'}
+contenu=${contenu%$'\n'}
 [ -n "$staged" ] || exit 0
 
 # --- 1. Fichiers d'environnement ---------------------------------------------
@@ -78,7 +97,7 @@ fi
 # impossible a versionner.
 motif='((^|[^A-Za-z0-9_])(sk-[A-Za-z0-9_-]{20,}|sk_[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})|BEGIN [A-Z ]*PRIVATE KEY|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Ss][Ee][Cc][Rr][Ee][Tt][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,})'
 
-nb_secrets=$(git diff --cached -U0 -M --diff-filter=ACMR \
+nb_secrets=$(git diff --cached -U0 -M --diff-filter=ACMRT \
   | grep -E '^\+' | grep -v '^+++' \
   | grep -Ec "$motif" || true)
 if [ "${nb_secrets:-0}" -gt 0 ]; then
@@ -113,7 +132,7 @@ while IFS= read -r f; do
   if [ "$apres" -gt "$avant" ]; then
     erreurs+=("$f : $apres lignes (plafond $MAX) et en hausse — etait a $avant")
   fi
-done <<< "$staged"
+done <<< "$contenu"
 
 # --- 4. Ruff, sur le contenu indexe ------------------------------------------
 # Deux precautions valent d'etre dites.
@@ -126,7 +145,7 @@ done <<< "$staged"
 # ses defauts — ici, cela faisait deux cent cinquante-huit signalements. Un hook
 # generique qui refuserait un commit sur les defauts d'un outil que le depot n'a
 # pas choisi serait une nuisance, pas une garde.
-py=$(printf '%s\n' "$staged" | grep -E '\.py$' || true)
+py=$(printf '%s\n' "$contenu" | grep -E '\.py$' || true)
 if [ -n "$py" ]; then
   configure=""
   [ -f ruff.toml ] || [ -f .ruff.toml ] && configure=oui
