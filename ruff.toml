@@ -1,0 +1,40 @@
+# Configuration ruff de V10 — deliberement etroite.
+#
+# Le hook pre-commit (section 4) ne lance ruff que si le depot le configure :
+# sans ce fichier, aucune regle ruff ne s'appliquait ici.
+#
+# Le jeu de regles est reduit a UNE seule regle, et ce n'est pas une paresse.
+# V10 est en production et n'a jamais ete passe au linter : activer d'emblee
+# E/W/F/I/UP/B aurait produit des centaines de signalements sur du code qui
+# tourne, et bloque le prochain commit urgent. La configuration ruff de Legion
+# (pyproject.toml) porte deja la lecon : « un outil qui crie autant n'est plus
+# lu — et le jour ou il a raison, personne ne le voit. »
+#
+# Pour elargir : ajouter une famille a la fois a `select`, lancer `ruff check .`,
+# traiter ou eteindre au site, puis passer a la suivante. Ordre conseille :
+# F (fautes reelles), puis I (imports), puis B (pieges connus), puis E/W.
+
+line-length = 100
+target-version = "py312"
+
+[lint]
+# PLR0915 — instructions par fonction. Pendant du plafond de 400 lignes par
+# fichier : celui-ci protege la cohesion du module, celui-la la lisibilite de
+# l'unite. V10 est precisement le depot qui montre pourquoi les deux sont
+# necessaires : le 18/09/2026, strategy_engine.py tenait en 357 lignes — sous le
+# plafond, donc invisible au hook — pendant que compute_signals, a l'interieur,
+# etait remontee de 190 a 221 lignes apres avoir ete ramenee de 470.
+select = ["PLR0915"]
+
+[lint.pylint]
+# 40 : plafond, pas cible. Mesure du 15/10/2026 (ruff 0.16, hors tests, noqa
+# ignores) sur V10, Legion, Thadeus et bot_v9 reunis — 1 793 fonctions, 11
+# au-dessus de 40, 4 au-dessus de 50, 3 au-dessus de 60. A 60 la regle n'aurait
+# mordu que trois fois et jamais plus ; a 40 elle attrape les vrais cas sans
+# gener le travail courant.
+max-statements = 40
+
+[lint.per-file-ignores]
+# Un test de scenario enchaine des etapes : il est long par nature et reste
+# lisible. Le plafond vise le code de production.
+"tests/**" = ["PLR0915"]

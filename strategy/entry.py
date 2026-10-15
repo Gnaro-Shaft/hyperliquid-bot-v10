@@ -63,7 +63,7 @@ class EntryManager:
             print(f"  [REVERSE][{coin}] Signal opposé {self.reverse_streaks[coin]}/{SIGNAL_CONFIRM_COUNT}")
         return False
 
-    def try_open(self, coin, sig, price):
+    def try_open(self, coin, sig, price):  # noqa: PLR0915 — 47 instructions au 18/09/2026, dette connue
         """Tente d'ouvrir une position si le signal est fort ET confirmé."""
         if self.positions[coin].get("pending_entry"):
             return

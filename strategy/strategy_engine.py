@@ -114,7 +114,7 @@ class StrategyEngine:
     def _features_from_row(row):
         return signal_output.features_depuis_bougie(row)
 
-    def compute_signals(self, score_threshold=None):
+    def compute_signals(self, score_threshold=None):  # noqa: PLR0915 — 89 instructions au 18/09/2026, dette connue
         """Scoring pondere multi-timeframe v8.2 — 15m comme timeframe principal.
 
         MOTEUR CONSERVÉ — cf. docstring v8 pour le détail des poids :

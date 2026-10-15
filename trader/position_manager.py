@@ -78,7 +78,7 @@ class PositionManager:
             ctx["closing_signal_id"] = closing_signal_id
         return ctx
 
-    def manage_trailing(self, coin, last_price):
+    def manage_trailing(self, coin, last_price):  # noqa: PLR0915 — 49 instructions au 18/09/2026, dette connue
         """Trailing profit + breakeven stop + trailing stop pour une paire.
 
         MOTEUR CONSERVÉ (seule sortie performante de v8). Les décisions

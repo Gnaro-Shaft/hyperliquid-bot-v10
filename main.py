@@ -99,7 +99,7 @@ class TradingBot:
     # Démarrage
     # ──────────────────────────────────────────────────────────
 
-    def start(self):
+    def start(self):  # noqa: PLR0915 — 43 instructions au 18/09/2026, dette connue
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
@@ -182,7 +182,7 @@ class TradingBot:
 
         self._trading_loop()
 
-    def _trading_loop(self):
+    def _trading_loop(self):  # noqa: PLR0915 — 55 instructions au 18/09/2026, dette connue
         while not self._shutdown:
             try:
                 # Reset journalier + rapport + auto-calibration
