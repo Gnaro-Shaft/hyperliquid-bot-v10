@@ -4,10 +4,15 @@
 # Refuse un commit qui contient :
 #   1. un fichier d'environnement (.env et variantes, hors modèles .example) ;
 #   2. une signature de secret dans les lignes ajoutées ;
-#   3. un fichier de code au-dessus de 400 lignes ET qui grossit par rapport à HEAD.
+#   3. un fichier de code au-dessus de 400 lignes ET qui grossit par rapport à HEAD ;
+#   4. un signalement de ruff sur un fichier Python indexé, si le dépôt configure ruff.
 #
 # Le contrôle de taille n'est pas rétroactif : un fichier déjà hors limite reste
-# commitable tant qu'il ne grandit pas.
+# commitable tant qu'il ne grandit pas. Un fichier renommé est jugé comme les
+# autres, et sa croissance se mesure par rapport à son ancien nom.
+#
+# Écrit pour le bash 3.2 de macOS autant que pour un bash récent : une
+# application graphique qui lance git n'a pas forcément Homebrew dans son PATH.
 #
 # Activation (une fois par clone) :  git config core.hooksPath .githooks
 
@@ -23,7 +28,33 @@ else
   base=$(git hash-object -t tree /dev/null)
 fi
 
-staged=$(git diff --cached --name-only --diff-filter=ACM)
+# Fichiers indexes, renommages compris. Sans le R de --diff-filter, un fichier
+# renomme -- meme modifie au passage -- echappait a toutes les regles : un
+# secret ajoute pendant un `git mv` passait, comme un `.env` obtenu par simple
+# renommage. -M force la detection meme si diff.renames est coupe.
+#
+# -z rend des noms bruts, separes par NUL : ni guillemets ni echappement. Sans
+# cela, git rendait « "accentu\303\251.py" » -- cite, donc ne finissant plus par
+# « .py » -- et les regles laissaient passer en silence un nom accentue, dans
+# des depots dont le code parle francais. Restent hors de portee : un nom
+# contenant un saut de ligne ou une tabulation.
+#
+# Pour un renommage, git rend « R<score> NUL ancien NUL nouveau » : le nouveau
+# nom va aux regles, la paire « nouveau TAB ancien » sert a la regle 3.
+staged=""
+renommes=""
+while IFS= read -r -d '' statut; do
+  IFS= read -r -d '' f
+  case "$statut" in
+    R*)
+      IFS= read -r -d '' nouveau
+      renommes+="$nouveau"$'\t'"$f"$'\n'
+      f=$nouveau
+      ;;
+  esac
+  staged+="$f"$'\n'
+done < <(git diff --cached --name-status -z -M --diff-filter=ACMR)
+staged=${staged%$'\n'}
 [ -n "$staged" ] || exit 0
 
 # --- 1. Fichiers d'environnement ---------------------------------------------
@@ -36,12 +67,18 @@ fi
 
 # --- 2. Signatures de secret --------------------------------------------------
 # Les motifs a prefixe (sk-, sk_, ghp_, AKIA...) sont ancres sur un debut de
-# mot : sans cela, `risk_manager_bloque_et_alerte` contient `sk_` suivi de 23
-# caracteres et passe pour une cle Stripe. Un vrai secret est toujours precede
-# d'un caractere non alphanumerique (guillemet, espace, =) ou du `+` du diff.
+# mot. Sans cet ancrage, un identifiant ordinaire du code passerait pour une
+# cle : il suffit qu'un nom de variable se termine par les deux lettres du
+# prefixe, soit suivi d'un underscore, puis d'une vingtaine de caracteres.
+# Un vrai secret est toujours precede d'un caractere non alphanumerique
+# (guillemet, espace, =) ou du `+` du diff.
+#
+# Ce commentaire evite volontairement de citer un tel identifiant en exemple :
+# l'exemple serait lui-meme detecte comme un secret, et ce fichier deviendrait
+# impossible a versionner.
 motif='((^|[^A-Za-z0-9_])(sk-[A-Za-z0-9_-]{20,}|sk_[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})|BEGIN [A-Z ]*PRIVATE KEY|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Ss][Ee][Cc][Rr][Ee][Tt][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,}|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9_-]{12,})'
 
-nb_secrets=$(git diff --cached -U0 --diff-filter=ACM \
+nb_secrets=$(git diff --cached -U0 -M --diff-filter=ACMR \
   | grep -E '^\+' | grep -v '^+++' \
   | grep -Ec "$motif" || true)
 if [ "${nb_secrets:-0}" -gt 0 ]; then
@@ -63,13 +100,59 @@ while IFS= read -r f; do
   [ -n "$apres" ] || continue
   [ "$apres" -gt "$MAX" ] || continue
 
-  avant=$(git show "$base:$f" 2>/dev/null | awk 'END { print NR }')
+  # Un fichier renomme se compare a son ancien nom : sinon un simple `git mv`
+  # d'un fichier deja hors limite partirait de zero et serait refuse.
+  origine=$f
+  while IFS=$'\t' read -r n o; do
+    [ "$n" = "$f" ] && origine=$o
+  done <<< "$renommes"
+
+  avant=$(git show "$base:$origine" 2>/dev/null | awk 'END { print NR }')
   avant=${avant:-0}
 
   if [ "$apres" -gt "$avant" ]; then
     erreurs+=("$f : $apres lignes (plafond $MAX) et en hausse — etait a $avant")
   fi
 done <<< "$staged"
+
+# --- 4. Ruff, sur le contenu indexe ------------------------------------------
+# Deux precautions valent d'etre dites.
+#
+# On lit le contenu **indexe**, pas celui du disque : apres un `git add -p`, les
+# deux different, et c'est ce qui part au commit qui doit etre juge. D'ou le
+# `git show ":$f"` passe a ruff sur son entree standard.
+#
+# On n'agit que si le depot **configure** ruff. Sans configuration, ruff applique
+# ses defauts — ici, cela faisait deux cent cinquante-huit signalements. Un hook
+# generique qui refuserait un commit sur les defauts d'un outil que le depot n'a
+# pas choisi serait une nuisance, pas une garde.
+py=$(printf '%s\n' "$staged" | grep -E '\.py$' || true)
+if [ -n "$py" ]; then
+  configure=""
+  [ -f ruff.toml ] || [ -f .ruff.toml ] && configure=oui
+  grep -q '^\[tool\.ruff' pyproject.toml 2>/dev/null && configure=oui
+
+  ruff=""
+  if [ -x .venv/bin/ruff ]; then
+    ruff=.venv/bin/ruff
+  elif command -v ruff >/dev/null 2>&1; then
+    ruff=$(command -v ruff)
+  fi
+
+  if [ -n "$configure" ] && [ -z "$ruff" ]; then
+    # Pas d'echec silencieux : le controle n'a pas eu lieu, et cela se voit.
+    echo "pre-commit : ruff est configure ici mais introuvable — controle non fait." >&2
+  elif [ -n "$configure" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      # --force-exclude : sur l'entree standard, ruff ignore les exclusions du
+      # projet sans lui. Le nom de fichier annonce sert aussi aux per-file-ignores.
+      if ! sortie=$(git show ":$f" | "$ruff" check --force-exclude --stdin-filename "$f" - 2>&1); then
+        erreurs+=("ruff sur $f :"$'\n'"$(printf '%s' "$sortie" | sed 's/^/      /')")
+      fi
+    done <<< "$py"
+  fi
+fi
 
 # --- Verdict ------------------------------------------------------------------
 [ ${#erreurs[@]} -eq 0 ] && exit 0
